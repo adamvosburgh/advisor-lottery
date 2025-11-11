@@ -35,7 +35,7 @@ function normalizeAdvisorRows(results) {
   const notesField = fields.find((field) => normalizeHeader(field) === 'notes');
 
   if (!nameField || !capacityField) {
-    throw new Error('Expected headers like "name" (or "advisor") and "capacity" in advisors CSV.');
+    throw new Error('Advisors CSV must have "Name" and "Capacity" columns. Optional: "Notes". See template for correct format.');
   }
 
   const advisors = [];
@@ -61,7 +61,7 @@ function normalizeAdvisorRows(results) {
   }
 
   if (!advisors.length) {
-    throw new Error('No advisor rows detected after parsing.');
+    throw new Error('No advisor rows detected. Please check your CSV format and see template.');
   }
 
   return advisors;
@@ -77,12 +77,24 @@ function normalizeStudentRows(results) {
   const studentHeader = fields[0];
   const studentHeaderNormalized = normalizeHeader(studentHeader);
   if (studentHeaderNormalized !== 'student' && studentHeaderNormalized !== 'name') {
-    throw new Error('First column must be labeled "student" or "name".');
+    throw new Error('First column must be "Name" or "Student". See template for correct format.');
   }
 
-  const remainingHeaders = fields.slice(1);
+  // Check if second column is email
+  if (fields.length < 2) {
+    throw new Error('Students CSV needs at least "Name" and "Email" columns, plus preference columns. See template for correct format.');
+  }
+
+  const secondHeader = fields[1];
+  const secondHeaderNormalized = normalizeHeader(secondHeader);
+  if (secondHeaderNormalized !== 'email') {
+    throw new Error('Second column must be "Email". See template for correct format.');
+  }
+
+  // Skip the first two columns (name and email) to get preferences
+  const remainingHeaders = fields.slice(2);
   if (!remainingHeaders.length) {
-    throw new Error('Students CSV needs at least one preference column.');
+    throw new Error('Students CSV needs at least one advisor preference column after Name and Email. See template for correct format.');
   }
 
   const allGeneric = remainingHeaders.every((header) => isGenericHeader(header));
@@ -145,13 +157,13 @@ function normalizeStudentRows(results) {
   }
 
   if (!students.length) {
-    throw new Error('No student rows detected after parsing.');
+    throw new Error('No student rows detected. Please check your CSV format and see template.');
   }
 
   return students;
 }
 
-function Dropzone({ label, mode, onParsed }) {
+function Dropzone({ label, mode, onParsed, templatePath }) {
   const inputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState('');
@@ -240,7 +252,22 @@ function Dropzone({ label, mode, onParsed }) {
 
   return (
     <div className="dropzone-card">
-      <div className="dropzone-label">{label}</div>
+      <div className="dropzone-label">
+        {label}
+        {templatePath && (
+          <>
+            {' / '}
+            <a
+              href={templatePath}
+              download
+              onClick={(e) => e.stopPropagation()}
+              style={{ color: '#0066cc', textDecoration: 'underline' }}
+            >
+              TEMPLATE
+            </a>
+          </>
+        )}
+      </div>
       <div
         className={`dropzone-area ${isDragging ? 'dropzone-area--active' : ''}`}
         onClick={onClick}

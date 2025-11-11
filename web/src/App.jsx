@@ -161,11 +161,17 @@ function App() {
       </header>
 
       <div className="grid-row">
-        <Dropzone label="Upload Advisors (.csv)" mode="advisors" onParsed={handleAdvisorsParsed} />
         <Dropzone
-          label="Upload Student Selections (.csv)"
+          label="UPLOAD ADVISORS (.CSV)"
+          mode="advisors"
+          onParsed={handleAdvisorsParsed}
+          templatePath="/templates/advisors-template.csv"
+        />
+        <Dropzone
+          label="UPLOAD STUDENT SELECTIONS (.CSV)"
           mode="students"
           onParsed={handleStudentsParsed}
+          templatePath="/templates/students-template.csv"
         />
       </div>
 
