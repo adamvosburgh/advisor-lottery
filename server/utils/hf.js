@@ -1,7 +1,7 @@
 const HF_MODEL = 'meta-llama/Llama-3.1-70B-Instruct';
 const HF_API_URL = 'https://router.huggingface.co/v1/chat/completions';
 
-async function callModel(systemPrompt, userPrompt) {
+async function callModel(systemPrompt, userPrompt, temperature = 0) {
   const apiKey = process.env.HF_API_KEY;
   if (!apiKey) {
     throw new Error('HF_API_KEY is not configured');
@@ -14,7 +14,7 @@ async function callModel(systemPrompt, userPrompt) {
       { role: 'user', content: userPrompt }
     ],
     max_tokens: 4096,
-    temperature: 0,
+    temperature,
     response_format: { type: 'json_object' }
   };
 

@@ -42,7 +42,8 @@ const SummarySchema = z.object({
   averagePlacement: z.number().finite(),
   percentFirstChoice: z.number().min(0).max(1),
   lowestPlacement: z.number().int().min(0),
-  notes: z.string().min(1)
+  notes: z.string().min(1),
+  strategyUsed: z.string().optional()
 });
 
 const OptionSchema = z.object({
@@ -52,7 +53,7 @@ const OptionSchema = z.object({
 });
 
 const ModelResponseSchema = z.object({
-  options: z.array(OptionSchema).length(3)
+  options: z.array(OptionSchema).min(1).max(3)
 });
 
 function validateRequestPayload(payload) {

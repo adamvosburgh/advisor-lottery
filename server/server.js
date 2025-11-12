@@ -19,7 +19,41 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 const JSON_BOUNDARY_REMINDER =
   'Return a single JSON object that starts with {"options": and ends with }';
 
-const SYSTEM_PROMPT = `You are an academic lottery assistant. You receive structured JSON input and must produce valid JSON output.
+function buildSystemPrompt(strategy) {
+  const strategyDescriptions = {
+    minimax: `OPTIMIZATION STRATEGY: BALANCED MINIMAX
+Your goal is to minimize the worst placement (the highest rank number any student receives) while keeping the average placement low.
+
+APPROACH:
+1. Start by placing all students in their first choice
+2. For advisors that are over-capacity, systematically reassign students to their next best available option
+3. Continue this overflow redistribution until all capacity constraints are met
+4. Prioritize moving students with the best alternative options to minimize the maximum displacement
+
+This strategy ensures NO student receives a catastrophically bad placement, even if it means fewer students get their absolute first choice.`,
+
+    greedy: `OPTIMIZATION STRATEGY: MAXIMIZE FIRST CHOICES
+Your goal is to maximize the number of students who receive their first choice advisor.
+
+APPROACH:
+1. Assign as many students as possible to their #1 choice
+2. For remaining students, assign them to their best available option
+3. Accept that some students may receive significantly lower placements if it means more students overall get their first choice
+
+This strategy prioritizes the total count of first-choice placements over fairness of distribution.`,
+
+    average: `OPTIMIZATION STRATEGY: MINIMIZE AVERAGE PLACEMENT
+Your goal is to achieve the lowest possible average rank across all students.
+
+APPROACH:
+1. Consider global trade-offs where moving one student from rank 1 to rank 2 might allow two students to move from rank 5 to rank 1
+2. Make strategic sacrifices across multiple students for overall statistical optimization
+3. Balance between maximizing first choices and minimizing worst-case scenarios
+
+This strategy finds the best overall statistical outcome through strategic compromises.`
+  };
+
+  return `You are an academic lottery assistant. You receive structured JSON input and must produce valid JSON output.
 
 The structured JSON input that you will receive will feature:
 1. A list of advisors, each with a capacity, and sometimes notes.
@@ -30,10 +64,12 @@ HARD CONSTRAINTS (MUST BE SATISFIED):
 2. If an advisor has a note like "Must have either 0 or X students", they must have EXACTLY 0 or EXACTLY X students (no other numbers)
 3. Each student must be assigned to exactly one advisor
 
+${strategyDescriptions[strategy]}
+
 OUTPUT FORMAT:
 ${JSON_BOUNDARY_REMINDER}
-Produce three distinct options that respect ALL hard constraints and aim for highest average rank.
-For each option: include a complete assignments list for every student, and a summary object that explains algorithmic logic and trade-offs.
+Produce ONE option that respects ALL hard constraints and follows the optimization strategy above.
+Include a complete assignments list for every student, and a summary object that explains the results.
 
 {
   "options": [
@@ -41,21 +77,20 @@ For each option: include a complete assignments list for every student, and a su
       "id": 1,
       "assignments": [{ "student": "<name>", "advisor": "<name>", "rank": <integer 1-based position in preference list> }],
       "summary": {
-        "algorithm": "<short description>",
+        "algorithm": "<short description of strategy used>",
         "averagePlacement": <number>,
         "percentFirstChoice": <number between 0 and 1>,
         "lowestPlacement": <integer>,
-        "notes": "<short bullet-like paragraph>"
+        "notes": "<explanation of key trade-offs made>"
       }
-    },
-    { ... id:2 ... },
-    { ... id:3 ... }
+    }
   ]
 }
 
 Return only JSON. No explanatory text outside the JSON structure.`;
+}
 
-const BASE_USER_DIRECTIVE = `Treat notes and explicit forbiddances as hard constraints; treat other parameter preferences as soft. Produce three different viable options. ${JSON_BOUNDARY_REMINDER} It is fine for advisors to receive zero students as long as all capacities and notes are obeyed.`;
+const BASE_USER_DIRECTIVE = `Treat notes and explicit forbiddances as hard constraints; treat other parameter preferences as soft. Produce one optimized solution following the specified strategy. ${JSON_BOUNDARY_REMINDER} It is fine for advisors to receive zero students as long as all capacities and notes are obeyed.`;
 
 const app = express();
 
@@ -197,6 +232,137 @@ async function persistRawResponses(lotterySlug, rawResponses) {
   }
 }
 
+async function runStrategyAttempt(strategy, requestData, lotterySlug, temperature) {
+  const systemPrompt = buildSystemPrompt(strategy);
+  const userPrompt = buildUserPrompt(lotterySlug, requestData);
+  const rawResponses = [];
+
+  for (let attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt += 1) {
+    let modelText;
+    let currentPrompt = attempt === 0 ? userPrompt : rawResponses[rawResponses.length - 1].nextPrompt;
+    let promptLabel = attempt === 0 ? 'initial' : rawResponses[rawResponses.length - 1].nextLabel;
+
+    try {
+      modelText = await callModel(systemPrompt, currentPrompt, temperature);
+    } catch (error) {
+      return { success: false, error: error.message || 'Model call failed.', rawResponses };
+    }
+
+    rawResponses.push({ attempt: promptLabel, text: modelText, strategy });
+
+    const parsedJSON = tryParseJSON(modelText);
+    if (!parsedJSON) {
+      if (attempt === MAX_MODEL_ATTEMPTS - 1) {
+        return { success: false, error: 'Model failed to return valid JSON after multiple retries.', rawResponses };
+      }
+      rawResponses[rawResponses.length - 1].nextPrompt = buildRepairPrompt(lotterySlug, requestData, modelText);
+      rawResponses[rawResponses.length - 1].nextLabel = `repair-${attempt + 1}`;
+      continue;
+    }
+
+    let modelResponse;
+    try {
+      modelResponse = validateModelResponse(parsedJSON);
+    } catch (schemaError) {
+      if (attempt === MAX_MODEL_ATTEMPTS - 1) {
+        return {
+          success: false,
+          error: 'Model response did not match expected schema.',
+          details: serializeZodError(schemaError),
+          rawResponses
+        };
+      }
+      rawResponses[rawResponses.length - 1].nextPrompt = buildRepairPrompt(
+        lotterySlug,
+        requestData,
+        JSON.stringify(parsedJSON, null, 2)
+      );
+      rawResponses[rawResponses.length - 1].nextLabel = `schema-${attempt + 1}`;
+      continue;
+    }
+
+    const annotated = validateAndAnnotate(requestData, modelResponse);
+    if (annotated.violationsByOption.length === 0) {
+      return { success: true, option: annotated.options[0], rawResponses };
+    }
+
+    if (attempt === MAX_MODEL_ATTEMPTS - 1) {
+      return {
+        success: false,
+        error: 'Model could not satisfy hard constraints after multiple attempts.',
+        violations: annotated.violationsByOption,
+        rawResponses
+      };
+    }
+
+    rawResponses[rawResponses.length - 1].nextPrompt = buildCorrectionPrompt(
+      lotterySlug,
+      requestData,
+      modelResponse,
+      annotated.violationsByOption
+    );
+    rawResponses[rawResponses.length - 1].nextLabel = `correction-${attempt + 1}`;
+  }
+
+  return { success: false, error: 'Max attempts reached without solution.', rawResponses };
+}
+
+function selectBestOption(options, strategy) {
+  if (options.length === 0) return null;
+  if (options.length === 1) return options[0];
+
+  if (strategy === 'minimax') {
+    // Minimize the worst placement (lowestPlacement is actually the highest rank number)
+    return options.reduce((best, current) => {
+      if (current.summary.lowestPlacement < best.summary.lowestPlacement) return current;
+      if (current.summary.lowestPlacement === best.summary.lowestPlacement) {
+        // Tie-breaker: better average
+        return current.summary.averagePlacement < best.summary.averagePlacement ? current : best;
+      }
+      return best;
+    });
+  } else if (strategy === 'greedy') {
+    // Maximize first choice percentage
+    return options.reduce((best, current) => {
+      if (current.summary.percentFirstChoice > best.summary.percentFirstChoice) return current;
+      if (current.summary.percentFirstChoice === best.summary.percentFirstChoice) {
+        // Tie-breaker: better average
+        return current.summary.averagePlacement < best.summary.averagePlacement ? current : best;
+      }
+      return best;
+    });
+  } else if (strategy === 'average') {
+    // Minimize average placement
+    return options.reduce((best, current) => {
+      if (current.summary.averagePlacement < best.summary.averagePlacement) return current;
+      if (current.summary.averagePlacement === best.summary.averagePlacement) {
+        // Tie-breaker: better worst case
+        return current.summary.lowestPlacement < best.summary.lowestPlacement ? current : best;
+      }
+      return best;
+    });
+  }
+
+  return options[0];
+}
+
+function enhanceSummaryWithStrategy(option, strategy) {
+  const strategyLabels = {
+    minimax: 'Balanced Minimax - Minimizes worst-case placement',
+    greedy: 'Maximize First Choices - Prioritizes number of students getting #1',
+    average: 'Minimize Average - Optimizes overall statistical satisfaction'
+  };
+
+  return {
+    ...option,
+    summary: {
+      ...option.summary,
+      strategyUsed: strategyLabels[strategy],
+      algorithm: `${option.summary.algorithm} (${strategy})`
+    }
+  };
+}
+
 app.post('/api/run', async (req, res) => {
   try {
     if (sharedPassword) {
@@ -225,96 +391,82 @@ app.post('/api/run', async (req, res) => {
 
     await ensureOutputsDir();
 
+    // Log the initial prompt info
     const promptLog = {
       timestamp: new Date().toISOString(),
-      systemPrompt: SYSTEM_PROMPT,
-      userPrompt: buildUserPrompt(lotterySlug, requestData),
+      strategies: ['minimax', 'greedy', 'average'],
+      attemptsPerStrategy: 3,
+      temperature: 0.8,
       request: requestData
     };
 
     await writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_prompt.json`), promptLog);
 
-    const rawResponses = [];
-    let currentPrompt = promptLog.userPrompt;
-    let promptLabel = 'initial';
-    let finalOptions = null;
-    for (let attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt += 1) {
-      let modelText;
-      try {
-        modelText = await callModel(SYSTEM_PROMPT, currentPrompt);
-      } catch (error) {
-        await persistRawResponses(lotterySlug, rawResponses);
-        return res.status(502).json({ error: error.message || 'Model call failed.' });
-      }
+    // Run 9 attempts: 3 for each strategy
+    const strategies = ['minimax', 'greedy', 'average'];
+    const allRawResponses = [];
+    const resultsByStrategy = {
+      minimax: [],
+      greedy: [],
+      average: []
+    };
 
-      rawResponses.push({ attempt: promptLabel, text: modelText });
+    // eslint-disable-next-line no-console
+    console.log(`Running 9 lottery attempts (3 per strategy) for ${lotterySlug}...`);
 
-      const parsedJSON = tryParseJSON(modelText);
-      if (!parsedJSON) {
-        if (attempt === MAX_MODEL_ATTEMPTS - 1) {
-          await persistRawResponses(lotterySlug, rawResponses);
-          return res
-            .status(502)
-            .json({ error: 'Model failed to return valid JSON after multiple retries.' });
-        }
+    for (const strategy of strategies) {
+      for (let run = 0; run < 3; run += 1) {
+        // eslint-disable-next-line no-console
+        console.log(`  Strategy: ${strategy}, Run: ${run + 1}/3`);
 
-        currentPrompt = buildRepairPrompt(lotterySlug, requestData, modelText);
-        promptLabel = `repair-${attempt + 1}`;
-        continue;
-      }
+        const result = await runStrategyAttempt(strategy, requestData, lotterySlug, 0.8);
 
-      let modelResponse;
-      try {
-        modelResponse = validateModelResponse(parsedJSON);
-      } catch (schemaError) {
-        if (attempt === MAX_MODEL_ATTEMPTS - 1) {
-          await persistRawResponses(lotterySlug, rawResponses);
-        return res.status(502).json({
-          error: 'Model response did not match expected schema.',
-          details: serializeZodError(schemaError)
+        allRawResponses.push({
+          strategy,
+          run: run + 1,
+          ...result
         });
+
+        if (result.success) {
+          resultsByStrategy[strategy].push(result.option);
         }
-
-        currentPrompt = buildRepairPrompt(
-          lotterySlug,
-          requestData,
-          JSON.stringify(parsedJSON, null, 2)
-        );
-        promptLabel = `schema-${attempt + 1}`;
-        continue;
       }
-
-      const annotated = validateAndAnnotate(requestData, modelResponse);
-      if (annotated.violationsByOption.length === 0) {
-        finalOptions = annotated.options;
-        lastViolations = null;
-        break;
-      }
-
-      if (attempt === MAX_MODEL_ATTEMPTS - 1) {
-        await persistRawResponses(lotterySlug, rawResponses);
-        return res.status(422).json({
-          error: 'Model could not satisfy hard constraints after multiple attempts.',
-          violations: annotated.violationsByOption
-        });
-      }
-
-      currentPrompt = buildCorrectionPrompt(
-        lotterySlug,
-        requestData,
-        modelResponse,
-        annotated.violationsByOption
-      );
-      promptLabel = `correction-${attempt + 1}`;
     }
 
-    if (!finalOptions) {
-      await persistRawResponses(lotterySlug, rawResponses);
-      return res.status(502).json({ error: 'Model did not return a valid solution.' });
+    // Save all raw responses
+    await persistRawResponses(lotterySlug, allRawResponses);
+
+    // Select the best option for each strategy
+    const finalOptions = [];
+    let hasAnySuccess = false;
+
+    for (let i = 0; i < strategies.length; i += 1) {
+      const strategy = strategies[i];
+      const options = resultsByStrategy[strategy];
+
+      if (options.length > 0) {
+        hasAnySuccess = true;
+        const bestOption = selectBestOption(options, strategy);
+        const enhancedOption = enhanceSummaryWithStrategy(bestOption, strategy);
+        enhancedOption.id = i + 1; // Assign IDs 1, 2, 3
+        finalOptions.push(enhancedOption);
+      }
     }
 
-    await persistRawResponses(lotterySlug, rawResponses);
+    if (!hasAnySuccess) {
+      return res.status(502).json({
+        error: 'All attempts failed to produce valid solutions.',
+        details: 'Check raw responses for debugging information.'
+      });
+    }
 
+    // If some strategies failed, we still return the successful ones
+    if (finalOptions.length < 3) {
+      // eslint-disable-next-line no-console
+      console.warn(`Only ${finalOptions.length}/3 strategies succeeded for ${lotterySlug}`);
+    }
+
+    // Write output files
     const outputWritePromises = finalOptions.map((option) =>
       writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_output${option.id}.json`), option)
     );
