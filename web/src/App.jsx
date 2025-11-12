@@ -157,7 +157,7 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <h1>Advisor Lottery</h1>
-        <p>Create three lottery assignments via MiniMax M2.</p>
+        <p>Create three lottery assignments via Qwen3.</p>
       </header>
 
       <div className="grid-row">
@@ -208,7 +208,7 @@ function App() {
         <section className="results-section">
           <div className="results-meta">
             <span className="results-slug">Slug: {results.lotterySlug}</span>
-            <span>MiniMax M2 generated {results.options.length} options.</span>
+            <span>Qwen3 generated {results.options.length} options.</span>
           </div>
           <div className="output-grid">
             {results.options.map((option) => (

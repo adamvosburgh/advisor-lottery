@@ -1,6 +1,6 @@
 # Advisor Lottery
 
-Single-page advisor–student lottery tool built with Vite + React on the frontend and an Express proxy on the backend. The server protects the Hugging Face API key and orchestrates MiniMax-M2 to produce three candidate assignment plans per run. Each run saves its prompt and model outputs under `outputs/`.
+Single-page advisor–student lottery tool built with Vite + React on the frontend and an Express proxy on the backend. The server protects the Hugging Face API key and orchestrates Qwen3-30B to produce three candidate assignment plans per run. Each run saves its prompt and model outputs under `outputs/`.
 
 > **Heads-up:** Sample CSVs and screenshots live in your local `examples/` (ignored by git). Drop your own files there while testing.
 
@@ -25,7 +25,7 @@ advisor-lottery/
 ## Prerequisites
 
 - Node.js 18+
-- Hugging Face API token with access to `MiniMaxAI/MiniMax-M2`
+- Hugging Face API token with access to `Qwen3-30B-A3B-Instruct-2507`
 
 ## Installation
 
@@ -112,7 +112,7 @@ Mixing styles per file is fine. Empty cells are ignored, duplicate advisor names
 
 - Express proxy enforces the shared password (if set) and validates payloads with Zod.
 - Prompt + raw/validated outputs are persisted to `outputs/`.
-- MiniMax-M2 is called via the Hugging Face router API (`https://router.huggingface.co/v1/chat/completions`).
+- Qwen3-30B is called via the Hugging Face router API (`https://router.huggingface.co/v1/chat/completions`).
 - Hard constraints enforced post-LLM: unique student assignments, capacity caps, “0 or max” advisors, forbidden pairs. If violations remain after a retry prompt, the offending option is flagged with a warning in the response.
 
 ## Testing Checklist

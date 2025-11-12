@@ -1,7 +1,7 @@
-const HF_MODEL = 'MiniMaxAI/MiniMax-M2:novita';
+const HF_MODEL = 'meta-llama/Llama-3.1-70B-Instruct';
 const HF_API_URL = 'https://router.huggingface.co/v1/chat/completions';
 
-async function callMinimaxM2(systemPrompt, userPrompt) {
+async function callModel(systemPrompt, userPrompt) {
   const apiKey = process.env.HF_API_KEY;
   if (!apiKey) {
     throw new Error('HF_API_KEY is not configured');
@@ -61,5 +61,5 @@ async function callMinimaxM2(systemPrompt, userPrompt) {
 }
 
 module.exports = {
-  callMinimaxM2
+  callModel
 };

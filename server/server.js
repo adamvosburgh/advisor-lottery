@@ -10,27 +10,36 @@ const {
   validateModelResponse,
   validateAndAnnotate
 } = require('./utils/validate');
-const { callMinimaxM2 } = require('./utils/hf');
+const { callModel } = require('./utils/hf');
 const { OUTPUT_DIR, ensureOutputsDir, writeJSON } = require('./utils/fileio');
 const { saveOptionCSVs } = require('./utils/csv');
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const JSON_BOUNDARY_REMINDER =
-  'Return a single JSON object that starts with {"options": and ends with }. Do not include <think>, explanations, markdown, or any extra text.';
+  'Return a single JSON object that starts with {"options": and ends with }';
 
-const SYSTEM_PROMPT = `You are an academic lottery assistant. You receive structured JSON with advisors (and their capacities/notes), students (and ranked preferences), and free-text parameters describing soft rules.
-Output strictly valid JSON in the schema shown below — no prose outside JSON. ${JSON_BOUNDARY_REMINDER}
-Produce three distinct options that respect hard constraints (capacities, required/forbidden pairs, ‘0 or max’ advisors) and aim to maximize preference satisfaction.
+const SYSTEM_PROMPT = `You are an academic lottery assistant. You receive structured JSON input and must produce valid JSON output.
+
+The structured JSON input that you will receive will feature:
+1. A list of advisors, each with a capacity, and sometimes notes.
+2. A list of students, each with a list of their preferred advisors in order of first to last preference.
+
+HARD CONSTRAINTS (MUST BE SATISFIED):
+1. Each advisor can have AT MOST their "capacity" number of students (never exceed this)
+2. If an advisor has a note like "Must have either 0 or X students", they must have EXACTLY 0 or EXACTLY X students (no other numbers)
+3. Each student must be assigned to exactly one advisor
+
+OUTPUT FORMAT:
+${JSON_BOUNDARY_REMINDER}
+Produce three distinct options that respect ALL hard constraints and aim for highest average rank.
 For each option: include a complete assignments list for every student, and a summary object that explains algorithmic logic and trade-offs.
-If an advisor does not appear in a student’s rankings, you may still assign if needed; set rank to a high number (e.g., 999).
-Schema to return:
 
 {
   "options": [
     {
       "id": 1,
-      "assignments": [{ "student": "<name>", "advisor": "<name>", "rank": <integer> }],
+      "assignments": [{ "student": "<name>", "advisor": "<name>", "rank": <integer 1-based position in preference list> }],
       "summary": {
         "algorithm": "<short description>",
         "averagePlacement": <number>,
@@ -44,7 +53,7 @@ Schema to return:
   ]
 }
 
-Return only JSON.`;
+Return only JSON. No explanatory text outside the JSON structure.`;
 
 const BASE_USER_DIRECTIVE = `Treat notes and explicit forbiddances as hard constraints; treat other parameter preferences as soft. Produce three different viable options. ${JSON_BOUNDARY_REMINDER} It is fine for advisors to receive zero students as long as all capacities and notes are obeyed.`;
 
@@ -93,6 +102,13 @@ function buildCorrectionPrompt(lotterySlug, requestData, currentJSON, violations
   return `${BASE_USER_DIRECTIVE}
 
 Your prior JSON violated these constraints: ${violationJSON}
+
+CRITICAL REMINDER:
+1. Each advisor's "capacity" is the MAXIMUM number of students they can have (never exceed this)
+2. If an advisor has a note like "Must have either 0 or X students", they must have EXACTLY 0 or EXACTLY X students (no other numbers allowed)
+3. You must assign ONLY the students from the input data - do not invent students or assign advisors as if they were students
+4. Every student from the input must be assigned exactly once
+
 Please return corrected JSON, changing as little as possible, preserving option IDs.
 Reference JSON you produced:
 ${previousJSON}
@@ -225,7 +241,7 @@ app.post('/api/run', async (req, res) => {
     for (let attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt += 1) {
       let modelText;
       try {
-        modelText = await callMinimaxM2(SYSTEM_PROMPT, currentPrompt);
+        modelText = await callModel(SYSTEM_PROMPT, currentPrompt);
       } catch (error) {
         await persistRawResponses(lotterySlug, rawResponses);
         return res.status(502).json({ error: error.message || 'Model call failed.' });
