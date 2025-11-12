@@ -1,132 +1,132 @@
 # Advisor Lottery
 
-Single-page advisor–student lottery tool built with Vite + React on the frontend and an Express proxy on the backend. The server protects the Hugging Face API key and orchestrates Qwen3-30B to produce three candidate assignment plans per run. Each run saves its prompt and model outputs under `outputs/`.
+Advisor–student assignment tool using three deterministic matching algorithms with LLM-powered constraint extraction and validation.
 
-> **Heads-up:** Sample CSVs and screenshots live in your local `examples/` (ignored by git). Drop your own files there while testing.
+**Architecture:**
+1. Three deterministic algorithms generate optimal assignments
+2. Names are anonymized before LLM calls (HMAC-SHA256 + random salt)
+3. LLM extracts constraints from natural language and validates outputs
+4. Results are de-anonymized and returned with real names
+
+## Quick Start
+
+```bash
+npm install
+cd web && npm install && cd ..
+
+# Create .env in root directory with HF_API_KEY
+npm run dev
+```
+
+Navigate to `http://localhost:3000`
+
+## Environment
+
+Create `.env` at project root:
+
+```bash
+HF_API_KEY=hf_xxx          # required
+APP_SHARED_PASSWORD=       # optional - leave blank to disable
+PORT=3001                  # optional
+```
+
+## How It Works
+
+### 1. Upload CSVs
+
+**Advisors:**
+```csv
+name,capacity,notes
+Alice,2,Must have either 0 or 2 students
+Bob,3,Would prefer 1 student
+Carol,1,
+```
+
+**Students:**
+```csv
+student,rank_1,rank_2,rank_3
+Jay,Alice,Bob,Carol
+Sara,Bob,Alice,
+```
+
+### 2. Algorithms Generate Assignments
+
+Three deterministic algorithms run in parallel:
+- **Water-Filling**: Minimizes worst-case placement (minimax)
+- **Deferred Acceptance**: Maximizes first-choice assignments (greedy)
+- **Minimum Regret**: Balances overall satisfaction (constraint satisfaction heuristics)
+
+### 3. LLM Validation
+
+**Llama-3.1-70B** (via Hugging Face API):
+- Extracts constraints from natural language (e.g., "must have 0 or 2 students" → conditional capacity constraint)
+- Categorizes into hard constraints (violations block solution), soft constraints (generate warnings), and optimization goals (guide user choice)
+- Validates all three algorithm outputs
+- Generates plain-language summaries tailored to user's specific constraints
+
+### 4. Privacy Layer
+
+All names are anonymized before LLM calls:
+- Uses HMAC-SHA256 with random 256-bit salt (unique per run)
+- Salt never sent to API 
+- Results de-anonymized before returning to user
+
+### 5. Output Files
+
+Each run writes to `outputs/`:
+- `<slug>_output1.csv`, `_output2.csv`, `_output3.csv` - Downloadable results
+- `<slug>_prompt.json` - Request data and extracted constraints (real names)
+- `<slug>_llm-payloads.json` - Anonymized data sent to API (for transparency)
 
 ## Project Structure
 
 ```
 advisor-lottery/
-├─ package.json              # backend deps + combined scripts
 ├─ server/
-│  ├─ server.js              # Express API
-│  └─ utils/                 # validation, Hugging Face, CSV + file helpers
+│  ├─ server.js              # Express API with algorithm orchestration
+│  └─ utils/
+│     ├─ algorithms.js       # Water-Filling, Deferred Acceptance, Minimum Regret
+│     ├─ hf.js               # LLM constraint extraction & validation
+│     ├─ anonymize.js        # HMAC-SHA256 pseudonymization
+│     ├─ validate.js         # Zod schema validation
+│     ├─ csv.js              # CSV output generation
+│     └─ fileio.js           # File I/O utilities
 ├─ web/                      # Vite + React SPA
-│  ├─ package.json
 │  └─ src/
-│     ├─ App.jsx             # single screen UI
+│     ├─ App.jsx             # Single-screen UI
 │     ├─ components/         # Dropzone, Field, OutputCard
-│     └─ styles.css          # warm, single-screen layout
-├─ outputs/                  # generated prompts + CSVs (gitignored)
-└─ examples/                 # place your local test CSVs (gitignored)
+│     └─ styles.css
+├─ outputs/                  # Generated files (gitignored)
+└─ examples/                 # Test data (gitignored)
 ```
 
-## Prerequisites
+## Technical Details
 
-- Node.js 18+
-- Hugging Face API token with access to `Qwen3-30B-A3B-Instruct-2507`
+- **LLM**: Llama-3.1-70B-Instruct via Hugging Face Router API
+- **Constraint Extraction**: System prompt categorizes natural language into hard/soft/optimization constraints
+- **Validation**: LLM checks algorithm outputs against extracted constraints, triggers retries if violations detected
+- **Anonymization**: HMAC-SHA256 with random salt prevents rainbow table attacks
+- **Fallback**: LLM failures fall back to regex-based validation
+- **Rate Limit**: 20 requests/minute
+- **Auth**: Optional shared password via `APP_SHARED_PASSWORD`
 
-## Installation
+## CSV Format Notes
 
-```bash
-# install backend deps
-npm install
-
-# install frontend deps
-cd web
-npm install
-```
-
-## Environment
-
-Create `.env` at the project root:
-
-```bash
-HF_API_KEY=hf_xxx          # required
-APP_SHARED_PASSWORD=       # optional shared passphrase, leave blank to disable
-PORT=3001                  # optional override
-```
-
-The server never exposes `HF_API_KEY` to the browser. When `APP_SHARED_PASSWORD` is set, the frontend prompts for it and sends it as the `x-app-pass` header on every `/api/run` call.
-
-## Running Locally
-
-```bash
-# start Express (port 3001) + Vite dev server (port 3000)
-npm run dev
-
-# OR run them independently
-npm run server          # backend only
-npm run web:dev         # frontend only
-```
-
-Navigate to `http://localhost:3000`. Each `/api/run` request is rate limited (20/minute) and the proxy writes:
-
-- `outputs/<lottery-slug>_prompt.json`
-- `outputs/<lottery-slug>_output{1..3}.json`
-- `outputs/<lottery-slug>_output{1..3}.csv`
-
-CSV downloads are streamed via `GET /download/:filename`.
-
-## CSV Format Cheatsheet
-
-### Advisors
-
+**Students CSV** accepts two styles:
 ```csv
-name,capacity,notes
-Beth,2,Does not want Jay
-Robert,3,Must have either 0 or 3 advisees (0 or max)
-Ana,1,
-```
-
-- `name` (or `advisor`) and `capacity` are required.
-- `notes` is optional; phrases containing “0 or max” enforce the hard rule, and “does not want ...” creates forbidden pairs.
-
-### Students
-
-Both styles are accepted:
-
-```csv
-# rank_* headers – left → right is top choice → fallback
+# Style 1: rank_* headers
 student,rank_1,rank_2,rank_3
-Jay,Beth,Robert,Ana
-Sara,Robert,Beth,
+Casey,Alice,Bob,Carol
 
-# advisor-name headers – left → right is preference order
-student,Beth,Robert,Ana
-Casey,1,2,
+# Style 2: advisor-name headers
+student,Alice,Bob,Carol
+Casey,1,2,3
 ```
 
-Mixing styles per file is fine. Empty cells are ignored, duplicate advisor names collapse to one, and unranked advisors default to rank 999 when assigned.
+Mixing styles is fine. Empty cells ignored, unranked advisors default to rank 999.
 
-## Frontend Highlights
+## Deployment
 
-- Roboto Mono on a warm neutral palette (`#F7F5F2` background, `#FAF7EE` cards).
-- Two-dropzone upload row, field row for lottery name + parameters, center `Generate` button, and three output cards with download buttons + warning badges.
-- Papa Parse handles CSV ingestion entirely in the browser—no file contents ever hit the server.
-
-> 💡 Add a UI screenshot (e.g., `examples/ui-screenshot.png`) to this directory for quick visual reference.
-
-## Backend Highlights
-
-- Express proxy enforces the shared password (if set) and validates payloads with Zod.
-- Prompt + raw/validated outputs are persisted to `outputs/`.
-- Qwen3-30B is called via the Hugging Face router API (`https://router.huggingface.co/v1/chat/completions`).
-- Hard constraints enforced post-LLM: unique student assignments, capacity caps, “0 or max” advisors, forbidden pairs. If violations remain after a retry prompt, the offending option is flagged with a warning in the response.
-
-## Testing Checklist
-
-- ✅ Upload advisors CSV with “0 or max” advisor note – expect enforcement.
-- ✅ Upload students CSV with partial rankings – ensure 999 rank fallback.
-- ✅ Include a “does not want” forbidden pair – verify the LLM is re-prompted / warning flagged.
-- ✅ Validate CSV downloads for each option (`/download/<slug>_output1.csv` etc.).
-- ✅ Optional auth: set `APP_SHARED_PASSWORD`, confirm the modal gate on the SPA.
-
-Add your own CSV fixtures under `examples/` while iterating—they remain local.
-
-## Deployment Notes
-
-- Keep the Express server private; the client never sees the HF token.
-- Reverse proxy `/download/*` to the Node process if serving behind nginx.
-- Periodically clean out `outputs/` if running unattended—they accumulate quickly.
+- Keep Express server private (never expose `HF_API_KEY`)
+- Reverse proxy `/download/*` if behind nginx
+- Periodically clean `outputs/` directory

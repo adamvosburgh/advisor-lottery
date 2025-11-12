@@ -1,3 +1,22 @@
+/**
+ * Advisor Lottery Server
+ *
+ * Architecture:
+ * 1. Three deterministic matching algorithms generate optimal assignments
+ *    - Water-Filling: Minimizes worst-case placement (minimax)
+ *    - Deferred Acceptance: Maximizes first-choice assignments (greedy)
+ *    - Minimum Regret: Balances overall satisfaction
+ *
+ * 2. LLM (Llama-3.1-70B) handles natural language processing
+ *    - Extracts constraints from advisor notes and parameters
+ *    - Validates algorithm outputs for constraint violations
+ *    - Triggers retries with adjusted constraints when violations detected
+ *
+ * 3. Robust error handling with fallbacks
+ *    - LLM failures fall back to regex-based validation
+ *    - Algorithm adjustments handle conditional capacity constraints
+ */
+
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
@@ -5,92 +24,20 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const slugify = require('slugify');
 const dotenv = require('dotenv');
-const {
-  validateRequestPayload,
-  validateModelResponse,
-  validateAndAnnotate
-} = require('./utils/validate');
-const { callModel } = require('./utils/hf');
+const { validateRequestPayload, validateAndAnnotate } = require('./utils/validate');
+const { extractConstraints, validateAssignments } = require('./utils/hf');
 const { OUTPUT_DIR, ensureOutputsDir, writeJSON } = require('./utils/fileio');
 const { saveOptionCSVs } = require('./utils/csv');
+const { createNameMapping } = require('./utils/anonymize');
+const {
+  runWaterFillingAlgorithm,
+  runDeferredAcceptance,
+  runMinimumRegretAlgorithm,
+  validateConstraints,
+  adjustAdvisorsForRetry
+} = require('./utils/algorithms');
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
-
-const JSON_BOUNDARY_REMINDER =
-  'Return a single JSON object that starts with {"options": and ends with }';
-
-function buildSystemPrompt(strategy) {
-  const strategyDescriptions = {
-    minimax: `OPTIMIZATION STRATEGY: BALANCED MINIMAX
-Your goal is to minimize the worst placement (the highest rank number any student receives) while keeping the average placement low.
-
-APPROACH:
-1. Start by placing all students in their first choice
-2. For advisors that are over-capacity, systematically reassign students to their next best available option
-3. Continue this overflow redistribution until all capacity constraints are met
-4. Prioritize moving students with the best alternative options to minimize the maximum displacement
-
-This strategy ensures NO student receives a catastrophically bad placement, even if it means fewer students get their absolute first choice.`,
-
-    greedy: `OPTIMIZATION STRATEGY: MAXIMIZE FIRST CHOICES
-Your goal is to maximize the number of students who receive their first choice advisor.
-
-APPROACH:
-1. Assign as many students as possible to their #1 choice
-2. For remaining students, assign them to their best available option
-3. Accept that some students may receive significantly lower placements if it means more students overall get their first choice
-
-This strategy prioritizes the total count of first-choice placements over fairness of distribution.`,
-
-    average: `OPTIMIZATION STRATEGY: MINIMIZE AVERAGE PLACEMENT
-Your goal is to achieve the lowest possible average rank across all students.
-
-APPROACH:
-1. Consider global trade-offs where moving one student from rank 1 to rank 2 might allow two students to move from rank 5 to rank 1
-2. Make strategic sacrifices across multiple students for overall statistical optimization
-3. Balance between maximizing first choices and minimizing worst-case scenarios
-
-This strategy finds the best overall statistical outcome through strategic compromises.`
-  };
-
-  return `You are an academic lottery assistant. You receive structured JSON input and must produce valid JSON output.
-
-The structured JSON input that you will receive will feature:
-1. A list of advisors, each with a capacity, and sometimes notes.
-2. A list of students, each with a list of their preferred advisors in order of first to last preference.
-
-HARD CONSTRAINTS (MUST BE SATISFIED):
-1. Each advisor can have AT MOST their "capacity" number of students (never exceed this)
-2. If an advisor has a note like "Must have either 0 or X students", they must have EXACTLY 0 or EXACTLY X students (no other numbers)
-3. Each student must be assigned to exactly one advisor
-
-${strategyDescriptions[strategy]}
-
-OUTPUT FORMAT:
-${JSON_BOUNDARY_REMINDER}
-Produce ONE option that respects ALL hard constraints and follows the optimization strategy above.
-Include a complete assignments list for every student, and a summary object that explains the results.
-
-{
-  "options": [
-    {
-      "id": 1,
-      "assignments": [{ "student": "<name>", "advisor": "<name>", "rank": <integer 1-based position in preference list> }],
-      "summary": {
-        "algorithm": "<short description of strategy used>",
-        "averagePlacement": <number>,
-        "percentFirstChoice": <number between 0 and 1>,
-        "lowestPlacement": <integer>,
-        "notes": "<explanation of key trade-offs made>"
-      }
-    }
-  ]
-}
-
-Return only JSON. No explanatory text outside the JSON structure.`;
-}
-
-const BASE_USER_DIRECTIVE = `Treat notes and explicit forbiddances as hard constraints; treat other parameter preferences as soft. Produce one optimized solution following the specified strategy. ${JSON_BOUNDARY_REMINDER} It is fine for advisors to receive zero students as long as all capacities and notes are obeyed.`;
 
 const app = express();
 
@@ -111,59 +58,6 @@ app.use(limiter);
 
 const sharedPassword = process.env.APP_SHARED_PASSWORD;
 const port = process.env.PORT || 3001;
-const MAX_MODEL_ATTEMPTS = 4;
-
-function buildPromptPayload(lotterySlug, requestData) {
-  return {
-    lottery_name: lotterySlug,
-    advisors: requestData.advisors,
-    students: requestData.students,
-    parameters: requestData.parameters
-  };
-}
-
-function buildUserPrompt(lotterySlug, requestData) {
-  const payload = buildPromptPayload(lotterySlug, requestData);
-  const payloadJSON = JSON.stringify(payload, null, 2);
-  return `${BASE_USER_DIRECTIVE}
-${payloadJSON}`;
-}
-
-function buildCorrectionPrompt(lotterySlug, requestData, currentJSON, violations) {
-  const violationJSON = JSON.stringify(violations, null, 2);
-  const previousJSON = JSON.stringify(currentJSON, null, 2);
-  const payload = buildPromptPayload(lotterySlug, requestData);
-  const payloadJSON = JSON.stringify(payload, null, 2);
-  return `${BASE_USER_DIRECTIVE}
-
-Your prior JSON violated these constraints: ${violationJSON}
-
-CRITICAL REMINDER:
-1. Each advisor's "capacity" is the MAXIMUM number of students they can have (never exceed this)
-2. If an advisor has a note like "Must have either 0 or X students", they must have EXACTLY 0 or EXACTLY X students (no other numbers allowed)
-3. You must assign ONLY the students from the input data - do not invent students or assign advisors as if they were students
-4. Every student from the input must be assigned exactly once
-
-Please return corrected JSON, changing as little as possible, preserving option IDs.
-Reference JSON you produced:
-${previousJSON}
-
-Original request for reference:
-${payloadJSON}`;
-}
-
-function buildRepairPrompt(lotterySlug, requestData, invalidText) {
-  const payload = buildPromptPayload(lotterySlug, requestData);
-  const payloadJSON = JSON.stringify(payload, null, 2);
-  return `${BASE_USER_DIRECTIVE}
-
-Your previous response was not valid JSON. ${JSON_BOUNDARY_REMINDER}
-Original request:
-${payloadJSON}
-
-Previous invalid response:
-${invalidText}`;
-}
 
 function serializeZodError(error) {
   if (!error?.issues) {
@@ -175,191 +69,6 @@ function serializeZodError(error) {
       path: issue.path.join('.'),
       message: issue.message
     }))
-  };
-}
-
-function cleanModelText(text) {
-  if (typeof text !== 'string') {
-    return '';
-  }
-
-  let trimmed = text.trim();
-
-  trimmed = trimmed.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fenced) {
-    trimmed = fenced[1].trim();
-  }
-
-  return trimmed;
-}
-
-function tryParseJSON(text) {
-  const attempts = [];
-  const cleaned = cleanModelText(text);
-
-  if (cleaned) {
-    attempts.push(cleaned);
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      attempts.push(cleaned.slice(firstBrace, lastBrace + 1));
-    }
-  }
-
-  for (const candidate of attempts) {
-    try {
-      return JSON.parse(candidate);
-    } catch (_) {
-      continue;
-    }
-  }
-
-  return null;
-}
-
-async function persistRawResponses(lotterySlug, rawResponses) {
-  if (!rawResponses.length) {
-    return;
-  }
-
-  try {
-    await writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_raw_responses.json`), rawResponses);
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.warn('Failed to persist raw model responses', error);
-  }
-}
-
-async function runStrategyAttempt(strategy, requestData, lotterySlug, temperature) {
-  const systemPrompt = buildSystemPrompt(strategy);
-  const userPrompt = buildUserPrompt(lotterySlug, requestData);
-  const rawResponses = [];
-
-  for (let attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt += 1) {
-    let modelText;
-    let currentPrompt = attempt === 0 ? userPrompt : rawResponses[rawResponses.length - 1].nextPrompt;
-    let promptLabel = attempt === 0 ? 'initial' : rawResponses[rawResponses.length - 1].nextLabel;
-
-    try {
-      modelText = await callModel(systemPrompt, currentPrompt, temperature);
-    } catch (error) {
-      return { success: false, error: error.message || 'Model call failed.', rawResponses };
-    }
-
-    rawResponses.push({ attempt: promptLabel, text: modelText, strategy });
-
-    const parsedJSON = tryParseJSON(modelText);
-    if (!parsedJSON) {
-      if (attempt === MAX_MODEL_ATTEMPTS - 1) {
-        return { success: false, error: 'Model failed to return valid JSON after multiple retries.', rawResponses };
-      }
-      rawResponses[rawResponses.length - 1].nextPrompt = buildRepairPrompt(lotterySlug, requestData, modelText);
-      rawResponses[rawResponses.length - 1].nextLabel = `repair-${attempt + 1}`;
-      continue;
-    }
-
-    let modelResponse;
-    try {
-      modelResponse = validateModelResponse(parsedJSON);
-    } catch (schemaError) {
-      if (attempt === MAX_MODEL_ATTEMPTS - 1) {
-        return {
-          success: false,
-          error: 'Model response did not match expected schema.',
-          details: serializeZodError(schemaError),
-          rawResponses
-        };
-      }
-      rawResponses[rawResponses.length - 1].nextPrompt = buildRepairPrompt(
-        lotterySlug,
-        requestData,
-        JSON.stringify(parsedJSON, null, 2)
-      );
-      rawResponses[rawResponses.length - 1].nextLabel = `schema-${attempt + 1}`;
-      continue;
-    }
-
-    const annotated = validateAndAnnotate(requestData, modelResponse);
-    if (annotated.violationsByOption.length === 0) {
-      return { success: true, option: annotated.options[0], rawResponses };
-    }
-
-    if (attempt === MAX_MODEL_ATTEMPTS - 1) {
-      return {
-        success: false,
-        error: 'Model could not satisfy hard constraints after multiple attempts.',
-        violations: annotated.violationsByOption,
-        rawResponses
-      };
-    }
-
-    rawResponses[rawResponses.length - 1].nextPrompt = buildCorrectionPrompt(
-      lotterySlug,
-      requestData,
-      modelResponse,
-      annotated.violationsByOption
-    );
-    rawResponses[rawResponses.length - 1].nextLabel = `correction-${attempt + 1}`;
-  }
-
-  return { success: false, error: 'Max attempts reached without solution.', rawResponses };
-}
-
-function selectBestOption(options, strategy) {
-  if (options.length === 0) return null;
-  if (options.length === 1) return options[0];
-
-  if (strategy === 'minimax') {
-    // Minimize the worst placement (lowestPlacement is actually the highest rank number)
-    return options.reduce((best, current) => {
-      if (current.summary.lowestPlacement < best.summary.lowestPlacement) return current;
-      if (current.summary.lowestPlacement === best.summary.lowestPlacement) {
-        // Tie-breaker: better average
-        return current.summary.averagePlacement < best.summary.averagePlacement ? current : best;
-      }
-      return best;
-    });
-  } else if (strategy === 'greedy') {
-    // Maximize first choice percentage
-    return options.reduce((best, current) => {
-      if (current.summary.percentFirstChoice > best.summary.percentFirstChoice) return current;
-      if (current.summary.percentFirstChoice === best.summary.percentFirstChoice) {
-        // Tie-breaker: better average
-        return current.summary.averagePlacement < best.summary.averagePlacement ? current : best;
-      }
-      return best;
-    });
-  } else if (strategy === 'average') {
-    // Minimize average placement
-    return options.reduce((best, current) => {
-      if (current.summary.averagePlacement < best.summary.averagePlacement) return current;
-      if (current.summary.averagePlacement === best.summary.averagePlacement) {
-        // Tie-breaker: better worst case
-        return current.summary.lowestPlacement < best.summary.lowestPlacement ? current : best;
-      }
-      return best;
-    });
-  }
-
-  return options[0];
-}
-
-function enhanceSummaryWithStrategy(option, strategy) {
-  const strategyLabels = {
-    minimax: 'Balanced Minimax - Minimizes worst-case placement',
-    greedy: 'Maximize First Choices - Prioritizes number of students getting #1',
-    average: 'Minimize Average - Optimizes overall statistical satisfaction'
-  };
-
-  return {
-    ...option,
-    summary: {
-      ...option.summary,
-      strategyUsed: strategyLabels[strategy],
-      algorithm: `${option.summary.algorithm} (${strategy})`
-    }
   };
 }
 
@@ -391,87 +100,284 @@ app.post('/api/run', async (req, res) => {
 
     await ensureOutputsDir();
 
-    // Log the initial prompt info
+    // eslint-disable-next-line no-console
+    console.log(`\nRunning advisor lottery for ${lotterySlug}...`);
+
+    // Create name mapping for anonymization with random salt
+    const { realToPseudo, pseudoToReal, salt } = createNameMapping(
+      requestData.advisors,
+      requestData.students
+    );
+
+    // STEP 0: Extract constraints using LLM
+    // eslint-disable-next-line no-console
+    console.log('  [0/3] Extracting constraints from natural language...');
+    const extractionResult = await extractConstraints(
+      requestData.advisors,
+      requestData.parameters,
+      realToPseudo,
+      pseudoToReal
+    );
+    const extractedConstraints = extractionResult.constraints;
+    const extractionLLMPayload = extractionResult.llmPayload;
+
+    // STEP 1: Run Water-Filling Algorithm (Option 1)
+    // eslint-disable-next-line no-console
+    console.log('  [1/3] Running water-filling algorithm (minimax)...');
+    let option1 = runWaterFillingAlgorithm(
+      requestData.students,
+      requestData.advisors,
+      requestData.parameters
+    );
+
+    // Check for constraint violations and retry if needed
+    let constraints1 = validateConstraints(
+      option1.assignments,
+      requestData.advisors,
+      requestData.students,
+      requestData.parameters
+    );
+
+    if (constraints1.hasViolations && constraints1.zeroOrMaxViolations.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log('    Constraint violation detected, adjusting and retrying...');
+      const adjustedAdvisors = adjustAdvisorsForRetry(
+        requestData.advisors,
+        constraints1.zeroOrMaxViolations
+      );
+      option1 = runWaterFillingAlgorithm(
+        requestData.students,
+        adjustedAdvisors,
+        requestData.parameters
+      );
+    }
+
+    // STEP 2: Run Deferred Acceptance (Option 2)
+    // eslint-disable-next-line no-console
+    console.log('  [2/3] Running deferred acceptance algorithm (greedy)...');
+    let option2 = runDeferredAcceptance(
+      requestData.students,
+      requestData.advisors,
+      requestData.parameters
+    );
+
+    // Check for constraint violations and retry if needed
+    let constraints2 = validateConstraints(
+      option2.assignments,
+      requestData.advisors,
+      requestData.students,
+      requestData.parameters
+    );
+
+    if (constraints2.hasViolations && constraints2.zeroOrMaxViolations.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log('    Constraint violation detected, adjusting and retrying...');
+      const adjustedAdvisors = adjustAdvisorsForRetry(
+        requestData.advisors,
+        constraints2.zeroOrMaxViolations
+      );
+      option2 = runDeferredAcceptance(
+        requestData.students,
+        adjustedAdvisors,
+        requestData.parameters
+      );
+    }
+
+    // STEP 3: Run Minimum Regret Algorithm (Option 3)
+    // eslint-disable-next-line no-console
+    console.log('  [3/3] Running minimum regret algorithm...');
+    let option3 = runMinimumRegretAlgorithm(
+      requestData.students,
+      requestData.advisors,
+      requestData.parameters
+    );
+
+    // Check for constraint violations and retry if needed
+    let constraints3 = validateConstraints(
+      option3.assignments,
+      requestData.advisors,
+      requestData.students,
+      requestData.parameters
+    );
+
+    if (constraints3.hasViolations && constraints3.zeroOrMaxViolations.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log('    Constraint violation detected, adjusting and retrying...');
+      const adjustedAdvisors = adjustAdvisorsForRetry(
+        requestData.advisors,
+        constraints3.zeroOrMaxViolations
+      );
+      option3 = runMinimumRegretAlgorithm(
+        requestData.students,
+        adjustedAdvisors,
+        requestData.parameters
+      );
+    }
+
+    // STEP 4: LLM Validation of all three options
+    // eslint-disable-next-line no-console
+    console.log('  [4/4] Validating assignments with LLM...');
+    const finalOptions = [option1, option2, option3];
+    const validationLLMPayloads = [];
+
+    for (let i = 0; i < finalOptions.length; i += 1) {
+      const option = finalOptions[i];
+      const validationResult = await validateAssignments(
+        requestData.advisors,
+        requestData.students,
+        requestData.parameters,
+        option.assignments,
+        extractedConstraints,
+        realToPseudo,
+        pseudoToReal
+      );
+
+      const validation = validationResult.validation;
+      validationLLMPayloads.push({
+        optionId: option.id,
+        payload: validationResult.llmPayload
+      });
+
+      // Attach validation results to the option for frontend display
+      finalOptions[i].validation = {
+        warnings: validation.warnings || [],
+        commentary: validation.commentary || []
+      };
+
+      // Replace technical notes with user-facing summary if available
+      if (validation.userFacingSummary) {
+        finalOptions[i].summary.notes = validation.userFacingSummary;
+      }
+
+      if (!validation.isValid && validation.violations.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`    Option ${option.id} has violations:`, validation.violations);
+
+        // Try to identify which advisors need adjustment for hard constraint violations
+        const violatedAdvisors = validation.violations
+          .filter((v) => v.type === 'conditional_capacity' || v.type === 'required_pair')
+          .map((v) => v.advisorName)
+          .filter(Boolean);
+
+        if (violatedAdvisors.length > 0) {
+          // eslint-disable-next-line no-console
+          console.log(`    Retrying Option ${option.id} with adjusted constraints...`);
+
+          // Set violating advisors to capacity 0
+          const adjustedAdvisors = requestData.advisors.map((advisor) => {
+            if (violatedAdvisors.includes(advisor.name)) {
+              return { ...advisor, capacity: 0 };
+            }
+            return advisor;
+          });
+
+          // Re-run the algorithm
+          if (option.id === 1) {
+            finalOptions[i] = runWaterFillingAlgorithm(
+              requestData.students,
+              adjustedAdvisors,
+              requestData.parameters
+            );
+          } else if (option.id === 2) {
+            finalOptions[i] = runDeferredAcceptance(
+              requestData.students,
+              adjustedAdvisors,
+              requestData.parameters
+            );
+          } else if (option.id === 3) {
+            finalOptions[i] = runMinimumRegretAlgorithm(
+              requestData.students,
+              adjustedAdvisors,
+              requestData.parameters
+            );
+          }
+
+          // Re-validate after retry
+          const revalidationResult = await validateAssignments(
+            requestData.advisors,
+            requestData.students,
+            requestData.parameters,
+            finalOptions[i].assignments,
+            extractedConstraints,
+            realToPseudo,
+            pseudoToReal
+          );
+
+          const revalidation = revalidationResult.validation;
+          // Update the validation payload with retry data
+          validationLLMPayloads[i] = {
+            optionId: option.id,
+            payload: revalidationResult.llmPayload,
+            retried: true
+          };
+
+          finalOptions[i].validation = {
+            warnings: revalidation.warnings || [],
+            commentary: revalidation.commentary || []
+          };
+
+          // Replace technical notes with user-facing summary if available
+          if (revalidation.userFacingSummary) {
+            finalOptions[i].summary.notes = revalidation.userFacingSummary;
+          }
+        }
+      }
+
+      // Log warnings and commentary
+      if (validation.warnings && validation.warnings.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`    Option ${option.id} has ${validation.warnings.length} warning(s)`);
+      }
+      if (validation.commentary && validation.commentary.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`    Option ${option.id} commentary: ${validation.commentary.length} goal(s) assessed`);
+      }
+    }
+
+    // Log results
     const promptLog = {
       timestamp: new Date().toISOString(),
-      strategies: ['minimax', 'greedy', 'average'],
-      attemptsPerStrategy: 3,
-      temperature: 0.8,
+      approach: 'Three Deterministic Algorithms with LLM Constraint Extraction & Validation',
+      extractedConstraints,
+      option1_stats: finalOptions[0].summary,
+      option2_stats: finalOptions[1].summary,
+      option3_stats: finalOptions[2].summary,
       request: requestData
     };
 
     await writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_prompt.json`), promptLog);
 
-    // Run 9 attempts: 3 for each strategy
-    const strategies = ['minimax', 'greedy', 'average'];
-    const allRawResponses = [];
-    const resultsByStrategy = {
-      minimax: [],
-      greedy: [],
-      average: []
+    // Write anonymized LLM payloads for transparency
+    const anonymizationLog = {
+      timestamp: new Date().toISOString(),
+      description:
+        'This file shows exactly what data was sent to the LLM API. All names are pseudonymized with HMAC-SHA256 + random salt.',
+      salt,
+      nameMapping: {
+        note: 'Mapping between real names and pseudonyms (only stored locally, never sent to API)',
+        advisors: Array.from(realToPseudo.entries())
+          .filter(([name]) => requestData.advisors.some((a) => a.name === name))
+          .map(([real, pseudo]) => ({ real, pseudo })),
+        students: Array.from(realToPseudo.entries())
+          .filter(([name]) => requestData.students.some((s) => s.name === name))
+          .map(([real, pseudo]) => ({ real, pseudo }))
+      },
+      constraintExtraction: extractionLLMPayload,
+      validations: validationLLMPayloads
     };
-
-    // eslint-disable-next-line no-console
-    console.log(`Running 9 lottery attempts (3 per strategy) for ${lotterySlug}...`);
-
-    for (const strategy of strategies) {
-      for (let run = 0; run < 3; run += 1) {
-        // eslint-disable-next-line no-console
-        console.log(`  Strategy: ${strategy}, Run: ${run + 1}/3`);
-
-        const result = await runStrategyAttempt(strategy, requestData, lotterySlug, 0.8);
-
-        allRawResponses.push({
-          strategy,
-          run: run + 1,
-          ...result
-        });
-
-        if (result.success) {
-          resultsByStrategy[strategy].push(result.option);
-        }
-      }
-    }
-
-    // Save all raw responses
-    await persistRawResponses(lotterySlug, allRawResponses);
-
-    // Select the best option for each strategy
-    const finalOptions = [];
-    let hasAnySuccess = false;
-
-    for (let i = 0; i < strategies.length; i += 1) {
-      const strategy = strategies[i];
-      const options = resultsByStrategy[strategy];
-
-      if (options.length > 0) {
-        hasAnySuccess = true;
-        const bestOption = selectBestOption(options, strategy);
-        const enhancedOption = enhanceSummaryWithStrategy(bestOption, strategy);
-        enhancedOption.id = i + 1; // Assign IDs 1, 2, 3
-        finalOptions.push(enhancedOption);
-      }
-    }
-
-    if (!hasAnySuccess) {
-      return res.status(502).json({
-        error: 'All attempts failed to produce valid solutions.',
-        details: 'Check raw responses for debugging information.'
-      });
-    }
-
-    // If some strategies failed, we still return the successful ones
-    if (finalOptions.length < 3) {
-      // eslint-disable-next-line no-console
-      console.warn(`Only ${finalOptions.length}/3 strategies succeeded for ${lotterySlug}`);
-    }
 
     // Write output files
     const outputWritePromises = finalOptions.map((option) =>
       writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_output${option.id}.json`), option)
     );
     outputWritePromises.push(saveOptionCSVs(lotterySlug, finalOptions));
+    outputWritePromises.push(
+      writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_llm-payloads.json`), anonymizationLog)
+    );
     await Promise.all(outputWritePromises);
+
+    // eslint-disable-next-line no-console
+    console.log('  ✓ Complete!\n');
 
     const responsePayload = {
       lotterySlug,

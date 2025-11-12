@@ -53,7 +53,7 @@ const OptionSchema = z.object({
 });
 
 const ModelResponseSchema = z.object({
-  options: z.array(OptionSchema).min(1).max(3)
+  options: z.array(OptionSchema).length(3)
 });
 
 function validateRequestPayload(payload) {

@@ -157,7 +157,7 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <h1>Advisor Lottery</h1>
-        <p>Create three lottery assignments via Qwen3.</p>
+        <p>Generate optimal advisor-student assignments using deterministic algorithms with AI-powered constraint validation.</p>
       </header>
 
       <div className="grid-row">
@@ -208,7 +208,7 @@ function App() {
         <section className="results-section">
           <div className="results-meta">
             <span className="results-slug">Slug: {results.lotterySlug}</span>
-            <span>Qwen3 generated {results.options.length} options.</span>
+            <span>Generated {results.options.length} optimized assignment options.</span>
           </div>
           <div className="output-grid">
             {results.options.map((option) => (
