@@ -397,6 +397,27 @@ app.post('/api/run', async (req, res) => {
   }
 });
 
+app.get('/api/provider', (req, res) => {
+  const currentProvider = process.env.LLM_PROVIDER || 'huggingface';
+  return res.json({ provider: currentProvider });
+});
+
+app.post('/api/provider', (req, res) => {
+  const { provider } = req.body;
+
+  if (!provider || !['ollama', 'huggingface'].includes(provider.toLowerCase())) {
+    return res.status(400).json({ error: 'Invalid provider. Must be "ollama" or "huggingface".' });
+  }
+
+  // Update the environment variable for the current process
+  process.env.LLM_PROVIDER = provider.toLowerCase();
+
+  // eslint-disable-next-line no-console
+  console.log(`[SERVER] LLM provider switched to: ${process.env.LLM_PROVIDER}`);
+
+  return res.json({ provider: process.env.LLM_PROVIDER });
+});
+
 app.get('/download/:file', (req, res) => {
   const requested = req.params.file;
   if (!/^[a-z0-9_.-]+$/i.test(requested)) {

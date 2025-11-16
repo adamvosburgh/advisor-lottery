@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Dropzone from './components/Dropzone.jsx';
 import Field from './components/Field.jsx';
 import OutputCard from './components/OutputCard.jsx';
@@ -17,6 +17,8 @@ function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [pendingPayload, setPendingPayload] = useState(null);
+  const [provider, setProvider] = useState('ollama'); // 'ollama' or 'huggingface'
+  const [loadingProvider, setLoadingProvider] = useState(true);
 
   const handleAdvisorsParsed = useCallback((data) => {
     setAdvisors(data);
@@ -24,6 +26,36 @@ function App() {
 
   const handleStudentsParsed = useCallback((data) => {
     setStudents(data);
+  }, []);
+
+  const fetchProvider = useCallback(async () => {
+    try {
+      const response = await fetch('/api/provider');
+      if (response.ok) {
+        const data = await response.json();
+        setProvider(data.provider);
+      }
+    } catch (err) {
+      console.error('Failed to fetch provider:', err);
+    } finally {
+      setLoadingProvider(false);
+    }
+  }, []);
+
+  const handleProviderToggle = useCallback(async (newProvider) => {
+    try {
+      const response = await fetch('/api/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: newProvider })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setProvider(data.provider);
+      }
+    } catch (err) {
+      console.error('Failed to update provider:', err);
+    }
   }, []);
 
   const submitPayload = useCallback(
@@ -153,6 +185,24 @@ function App() {
 
   const hasResults = useMemo(() => Boolean(results?.options?.length), [results]);
 
+  // Fetch initial provider on mount
+  useEffect(() => {
+    fetchProvider();
+  }, [fetchProvider]);
+
+  const speedInfo = useMemo(() => {
+    if (provider === 'ollama') {
+      return {
+        label: 'Slow',
+        description: 'Uses a lightweight (llama 3.1:8B) LLM on Adam\'s home server. Will take approx 5min. Low energy + Free.'
+      };
+    }
+    return {
+      label: 'Fast',
+      description: 'Uses a midweight (llama 3.1:70B) LLM via an API call. Will take approx 10 seconds. Mid energy + $0.01 billed to Adam.'
+    };
+  }, [provider]);
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -200,6 +250,29 @@ function App() {
         >
           {loading ? 'Generating…' : 'Generate'}
         </button>
+
+        <div className="speed-toggle">
+          <span className="speed-label">Speed:</span>
+          <div className="speed-buttons">
+            <button
+              type="button"
+              className={`speed-button ${provider === 'ollama' ? 'speed-button--active' : ''}`}
+              onClick={() => handleProviderToggle('ollama')}
+              disabled={loading || loadingProvider}
+            >
+              Slow
+            </button>
+            <button
+              type="button"
+              className={`speed-button ${provider === 'huggingface' ? 'speed-button--active' : ''}`}
+              onClick={() => handleProviderToggle('huggingface')}
+              disabled={loading || loadingProvider}
+            >
+              Fast
+            </button>
+          </div>
+          <span className="speed-description">{speedInfo.description}</span>
+        </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
