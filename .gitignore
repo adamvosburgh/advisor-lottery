@@ -1,7 +1,14 @@
 .DS_Store
 .env
+.env.backup
 node_modules/
 dist/
 .vite/
 outputs/
 examples/
+logs/
+.pm2/
+DEPLOYMENT.md
+projectinfo.md
+ecosystem.config.js
+.claude/

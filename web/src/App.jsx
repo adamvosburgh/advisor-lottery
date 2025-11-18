@@ -13,10 +13,10 @@ function App() {
   const [error, setError] = useState('');
 
   const [appPassword, setAppPassword] = useState('');
-  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
-  const [pendingPayload, setPendingPayload] = useState(null);
   const [provider, setProvider] = useState('ollama'); // 'ollama' or 'huggingface'
   const [loadingProvider, setLoadingProvider] = useState(true);
 
@@ -58,15 +58,36 @@ function App() {
     }
   }, []);
 
+  // Check if password is required on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/api/provider');
+        if (response.status === 401) {
+          // Password is required
+          setIsAuthenticated(false);
+        } else {
+          // No password required, allow access
+          setIsAuthenticated(true);
+        }
+      } catch (err) {
+        // If we can't reach server, assume no password required
+        setIsAuthenticated(true);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+    checkAuth();
+  }, []);
+
   const submitPayload = useCallback(
-    async (payload, passwordOverride) => {
+    async (payload) => {
       const headers = {
         'Content-Type': 'application/json'
       };
 
-      const passwordToUse = passwordOverride || appPassword;
-      if (passwordToUse) {
-        headers['x-app-pass'] = passwordToUse;
+      if (appPassword) {
+        headers['x-app-pass'] = appPassword;
       }
 
       let response;
@@ -87,16 +108,6 @@ function App() {
         // ignore JSON parse errors; body stays null
       }
 
-      if (response.status === 401) {
-        setPendingPayload(payload);
-        setShowPasswordPrompt(true);
-        if (passwordToUse) {
-          setPasswordError('Incorrect password, please try again.');
-          setPasswordInput('');
-        }
-        return false;
-      }
-
       if (!response.ok) {
         const message =
           body?.error?.message ||
@@ -106,8 +117,6 @@ function App() {
       }
 
       setResults(body);
-      setPendingPayload(null);
-      setPasswordError('');
       return true;
     },
     [appPassword]
@@ -147,41 +156,41 @@ function App() {
     }
   }, [advisors, lotteryName, parameters, students, submitPayload]);
 
-  const handlePasswordSubmit = useCallback(async () => {
+  const handleSplashPasswordSubmit = useCallback(async () => {
     if (!passwordInput.trim()) {
       setPasswordError('Password is required.');
       return;
     }
 
-    if (!pendingPayload) {
-      setShowPasswordPrompt(false);
-      return;
-    }
-
-    setShowPasswordPrompt(false);
-    setAppPassword(passwordInput);
-    setLoading(true);
-    const payload = pendingPayload;
+    // Test the password by making a simple API call
     try {
-      const handled = await submitPayload(payload, passwordInput);
-      if (!handled) {
-        // remain in prompt; submitPayload already re-opened modal if needed
-      } else {
-        setPasswordInput('');
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [passwordInput, pendingPayload, submitPayload]);
+      const response = await fetch('/api/provider', {
+        headers: {
+          'x-app-pass': passwordInput
+        }
+      });
 
-  const handlePasswordCancel = useCallback(() => {
-    setShowPasswordPrompt(false);
-    setPasswordInput('');
-    setPasswordError('');
-    setPendingPayload(null);
-  }, []);
+      if (response.status === 401) {
+        setPasswordError('Incorrect password. Please try again.');
+        setPasswordInput('');
+        return;
+      }
+
+      // Password is correct
+      setAppPassword(passwordInput);
+      setIsAuthenticated(true);
+      setPasswordError('');
+      setPasswordInput('');
+    } catch (err) {
+      setPasswordError('Failed to verify password. Please try again.');
+    }
+  }, [passwordInput]);
+
+  const handleSplashPasswordKeyPress = useCallback((event) => {
+    if (event.key === 'Enter') {
+      handleSplashPasswordSubmit();
+    }
+  }, [handleSplashPasswordSubmit]);
 
   const hasResults = useMemo(() => Boolean(results?.options?.length), [results]);
 
@@ -203,6 +212,37 @@ function App() {
     };
   }, [provider]);
 
+  // Show splash screen if not authenticated
+  if (!isAuthenticated && !checkingAuth) {
+    return (
+      <div className="splash-screen">
+        <div className="splash-card">
+          <h1>Advisor Lottery</h1>
+          <p>Enter the password to access this site</p>
+          <input
+            type="password"
+            className="splash-input"
+            value={passwordInput}
+            onChange={(event) => setPasswordInput(event.target.value)}
+            onKeyPress={handleSplashPasswordKeyPress}
+            placeholder="Enter the password"
+            autoFocus
+          />
+          {passwordError && <div className="splash-error">{passwordError}</div>}
+          <button type="button" className="splash-button" onClick={handleSplashPasswordSubmit}>
+            Enter
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show nothing while checking auth
+  if (checkingAuth) {
+    return null;
+  }
+
+  // Show main app if authenticated
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -236,7 +276,7 @@ function App() {
           label="Additional parameters (optional)"
           value={parameters}
           onChange={setParameters}
-          placeholder="Forbidden pairs, priorities, extra notes..."
+          placeholder="Additional constraints, priorities, notes for the solver to incorporate"
           multiline
         />
       </div>
@@ -289,31 +329,6 @@ function App() {
             ))}
           </div>
         </section>
-      )}
-
-      {showPasswordPrompt && (
-        <div className="modal-backdrop">
-          <div className="modal-card">
-            <h2>Enter shared password</h2>
-            <p>This server requires the shared passphrase before generating results.</p>
-            <input
-              type="password"
-              className="modal-input"
-              value={passwordInput}
-              onChange={(event) => setPasswordInput(event.target.value)}
-              placeholder="Password"
-            />
-            {passwordError && <div className="modal-error">{passwordError}</div>}
-            <div className="modal-actions">
-              <button type="button" className="secondary-button" onClick={handlePasswordCancel}>
-                Cancel
-              </button>
-              <button type="button" className="primary-button" onClick={handlePasswordSubmit}>
-                Continue
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

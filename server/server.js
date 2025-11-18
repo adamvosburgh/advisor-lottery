@@ -37,13 +37,26 @@ const {
   adjustAdvisorsForRetry
 } = require('./utils/algorithms');
 
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
+const envPath = path.join(__dirname, '..', '.env');
+// eslint-disable-next-line no-console
+console.log(`[SERVER] Loading .env from: ${envPath}`);
+const dotenvResult = dotenv.config({ path: envPath, override: true });
+// eslint-disable-next-line no-console
+console.log(`[SERVER] dotenv result:`, dotenvResult.error ? `ERROR: ${dotenvResult.error}` : `SUCCESS (${Object.keys(dotenvResult.parsed || {}).length} vars)`);
+// eslint-disable-next-line no-console
+console.log(`[SERVER] dotenv parsed:`, dotenvResult.parsed);
+
+const sharedPassword = process.env.APP_SHARED_PASSWORD;
+const port = process.env.PORT || 4747;
+
+// eslint-disable-next-line no-console
+console.log(`[SERVER] Shared password is ${sharedPassword ? 'SET (length: ' + sharedPassword.length + ')' : 'NOT SET'}`);
 
 const app = express();
 
 app.use(
   cors({
-    origin: 'http://localhost:3000'
+    origin: 'https://lab.adamvosburgh.com'
   })
 );
 app.use(express.json({ limit: '2mb' }));
@@ -55,9 +68,6 @@ const limiter = rateLimit({
   legacyHeaders: false
 });
 app.use(limiter);
-
-const sharedPassword = process.env.APP_SHARED_PASSWORD;
-const port = process.env.PORT || 3001;
 
 function serializeZodError(error) {
   if (!error?.issues) {
@@ -398,6 +408,12 @@ app.post('/api/run', async (req, res) => {
 });
 
 app.get('/api/provider', (req, res) => {
+  if (sharedPassword) {
+    const provided = req.headers['x-app-pass'];
+    if (!provided || provided !== sharedPassword) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
   const currentProvider = process.env.LLM_PROVIDER || 'huggingface';
   return res.json({ provider: currentProvider });
 });

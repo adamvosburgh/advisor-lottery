@@ -2,32 +2,49 @@
 
 Advisor–student assignment tool using three deterministic matching algorithms with LLM-powered constraint extraction and validation.
 
+**Live Site:** https://lab.adamvosburgh.com
+
 **Architecture:**
 1. Three deterministic algorithms generate optimal assignments
 2. Names are anonymized before LLM calls (HMAC-SHA256 + random salt)
 3. LLM extracts constraints from natural language and validates outputs
 4. Results are de-anonymized and returned with real names
+5. Dual LLM support: local Ollama (free, slow) or HuggingFace API (paid, fast)
 
 ## Quick Start
 
+### Development
 ```bash
 npm install
 cd web && npm install && cd ..
 
-# Create .env in root directory with HF_API_KEY
+# Create .env in root directory
 npm run dev
 ```
 
-Navigate to `http://localhost:3000`
+Navigate to `http://localhost:4748`
+
+### Production
+See `DEPLOYMENT.md` for full deployment instructions with PM2 and Cloudflare Tunnel.
 
 ## Environment
 
 Create `.env` at project root:
 
 ```bash
-HF_API_KEY=hf_xxx          # required
-APP_SHARED_PASSWORD=       # optional - leave blank to disable
-PORT=3001                  # optional
+# LLM Provider (ollama or huggingface)
+LLM_PROVIDER=ollama
+
+# HuggingFace (only if LLM_PROVIDER=huggingface)
+HF_API_KEY=hf_xxx
+
+# Ollama (only if LLM_PROVIDER=ollama)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.1:8b
+
+# Server
+APP_SHARED_PASSWORD=       # optional - leave blank to disable password protection
+PORT=4747                  # backend port
 ```
 
 ## How It Works
@@ -58,7 +75,12 @@ Three deterministic algorithms run in parallel:
 
 ### 3. LLM Validation
 
-**Llama-3.1-70B** (via Hugging Face API):
+**Dual LLM Support:**
+- **Ollama (Local)**: Llama-3.1-8B running locally - free, slower (~5 min)
+- **HuggingFace (API)**: Llama-3.1-70B via API - paid, faster (~10 sec)
+- Toggle between providers in the UI or via `.env`
+
+**LLM Tasks:**
 - Extracts constraints from natural language (e.g., "must have 0 or 2 students" → conditional capacity constraint)
 - Categorizes into hard constraints (violations block solution), soft constraints (generate warnings), and optimization goals (guide user choice)
 - Validates all three algorithm outputs
