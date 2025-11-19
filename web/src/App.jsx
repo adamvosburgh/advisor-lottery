@@ -124,7 +124,7 @@ function App() {
 
   const handleGenerate = useCallback(async () => {
     if (!advisors.length) {
-      setError('Please upload an advisors CSV.');
+      setError('Please upload a faculty CSV.');
       return;
     }
     if (!students.length) {
@@ -247,12 +247,12 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <h1>Advisor Lottery</h1>
-        <p>Generate optimal advisor-student assignments using deterministic algorithms with AI-powered constraint validation.</p>
+        <p>Generate optimal faculty-student assignments using deterministic algorithms with AI-powered constraint validation.</p>
       </header>
 
       <div className="grid-row">
         <Dropzone
-          label="UPLOAD ADVISORS (.CSV)"
+          label="UPLOAD FACULTY (.CSV)"
           mode="advisors"
           onParsed={handleAdvisorsParsed}
           templatePath="/templates/advisors-template.csv"

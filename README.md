@@ -1,6 +1,6 @@
 # Advisor Lottery
 
-Advisor–student assignment tool using three deterministic matching algorithms with LLM-powered constraint extraction and validation.
+Faculty–student assignment tool using three deterministic matching algorithms with LLM-powered constraint extraction and validation.
 
 **Live Site:** https://lab.adamvosburgh.com
 
@@ -51,7 +51,7 @@ PORT=4747                  # backend port
 
 ### 1. Upload CSVs
 
-**Advisors:**
+**Faculty:**
 ```csv
 name,capacity,notes
 Alice,2,Must have either 0 or 2 students
@@ -63,7 +63,7 @@ Carol,1,
 ```csv
 student,rank_1,rank_2,rank_3
 Jay,Alice,Bob,Carol
-Sara,Bob,Alice,
+Sara,Bob,Alice,Carol
 ```
 
 ### 2. Algorithms Generate Assignments
@@ -140,12 +140,12 @@ advisor-lottery/
 student,rank_1,rank_2,rank_3
 Casey,Alice,Bob,Carol
 
-# Style 2: advisor-name headers
+# Style 2: faculty-name headers
 student,Alice,Bob,Carol
 Casey,1,2,3
 ```
 
-Mixing styles is fine. Empty cells ignored, unranked advisors default to rank 999.
+Mixing styles is fine. Empty cells ignored, unranked faculty default to rank 999.
 
 ## Deployment
 
