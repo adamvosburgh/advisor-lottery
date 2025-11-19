@@ -247,7 +247,7 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <h1>GSAPP Lottery</h1>
-        <p>Generate optimal faculty-student assignments using deterministic algorithms with AI-powered constraint validation.</p>
+        <p>Generate optimal faculty-student assignments using deterministic algorithims, and an LLM for constraint validation.</p>
       </header>
 
       <div className="grid-row">
