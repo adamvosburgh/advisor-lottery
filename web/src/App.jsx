@@ -217,7 +217,7 @@ function App() {
     return (
       <div className="splash-screen">
         <div className="splash-card">
-          <h1>Advisor Lottery</h1>
+          <h1>GSAPP Lottery</h1>
           <p>Enter the password to access this site</p>
           <input
             type="password"
@@ -246,7 +246,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Advisor Lottery</h1>
+        <h1>GSAPP Lottery</h1>
         <p>Generate optimal faculty-student assignments using deterministic algorithms with AI-powered constraint validation.</p>
       </header>
 

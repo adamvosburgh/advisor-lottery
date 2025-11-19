@@ -1,4 +1,4 @@
-# Advisor Lottery
+# GSAPP Lottery
 
 Faculty–student assignment tool using three deterministic matching algorithms with LLM-powered constraint extraction and validation.
 
