@@ -4,6 +4,7 @@ import Field from './components/Field.jsx';
 import OutputCard from './components/OutputCard.jsx';
 
 function App() {
+  const [mode, setMode] = useState('advisor'); // 'advisor' or 'studio'
   const [advisors, setAdvisors] = useState([]);
   const [students, setStudents] = useState([]);
   const [lotteryName, setLotteryName] = useState('');
@@ -11,6 +12,10 @@ function App() {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Studio mode specific fields
+  const [maxStudentsPerStudio, setMaxStudentsPerStudio] = useState('12');
+  const [minStudentsPerStudio, setMinStudentsPerStudio] = useState('8');
 
   const [appPassword, setAppPassword] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -123,10 +128,14 @@ function App() {
   );
 
   const handleGenerate = useCallback(async () => {
-    if (!advisors.length) {
-      setError('Please upload a faculty CSV.');
-      return;
+    // Validation based on mode
+    if (mode === 'advisor') {
+      if (!advisors.length) {
+        setError('Please upload a faculty CSV.');
+        return;
+      }
     }
+
     if (!students.length) {
       setError('Please upload a students CSV.');
       return;
@@ -138,12 +147,35 @@ function App() {
       return;
     }
 
-    const payload = {
-      advisors,
-      students,
-      parameters,
-      lotteryName: trimmedName
-    };
+    // Build payload based on mode
+    let payload;
+    if (mode === 'advisor') {
+      payload = {
+        advisors,
+        students,
+        parameters,
+        lotteryName: trimmedName
+      };
+    } else {
+      // Studio mode: infer faculty from student preferences
+      const studioNames = new Set();
+      students.forEach((student) => {
+        (student.preferences || []).forEach((pref) => studioNames.add(pref));
+      });
+
+      const inferredAdvisors = Array.from(studioNames).map((name) => ({
+        name,
+        capacity: parseInt(maxStudentsPerStudio, 10) || 12,
+        notes: `minimum ${minStudentsPerStudio} students`
+      }));
+
+      payload = {
+        advisors: inferredAdvisors,
+        students,
+        parameters,
+        lotteryName: trimmedName
+      };
+    }
 
     setLoading(true);
     setError('');
@@ -154,7 +186,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [advisors, lotteryName, parameters, students, submitPayload]);
+  }, [advisors, lotteryName, parameters, students, submitPayload, mode, maxStudentsPerStudio, minStudentsPerStudio]);
 
   const handleSplashPasswordSubmit = useCallback(async () => {
     if (!passwordInput.trim()) {
@@ -247,23 +279,93 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <h1>GSAPP Lottery</h1>
-        <p>Generate optimal faculty-student assignments using deterministic algorithims, and an LLM for constraint validation.</p>
+        <p>Generate optimal faculty-student assignments using deterministic algorithms and an LLM for constraint validation.</p>
       </header>
 
-      <div className="grid-row">
-        <Dropzone
-          label="UPLOAD FACULTY (.CSV)"
-          mode="advisors"
-          onParsed={handleAdvisorsParsed}
-          templatePath="/templates/advisors-template.csv"
-        />
-        <Dropzone
-          label="UPLOAD STUDENT SELECTIONS (.CSV)"
-          mode="students"
-          onParsed={handleStudentsParsed}
-          templatePath="/templates/students-template.csv"
-        />
+      {/* Mode Selector */}
+      <div className="mode-selector">
+        <label>
+          <input
+            type="radio"
+            name="mode"
+            value="advisor"
+            checked={mode === 'advisor'}
+            onChange={(e) => setMode(e.target.value)}
+            disabled={loading}
+          />
+          <span>CDP Advisor Lottery</span>
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="mode"
+            value="studio"
+            checked={mode === 'studio'}
+            onChange={(e) => setMode(e.target.value)}
+            disabled={loading}
+          />
+          <span>Architecture Studio Lottery</span>
+        </label>
       </div>
+
+      {/* Advisor Mode: Show both dropzones */}
+      {mode === 'advisor' && (
+        <div className="grid-row">
+          <Dropzone
+            label="UPLOAD FACULTY (.CSV)"
+            mode="advisors"
+            onParsed={handleAdvisorsParsed}
+            templatePath="/templates/advisors-template.csv"
+          />
+          <Dropzone
+            label="UPLOAD STUDENT SELECTIONS (.CSV)"
+            mode="students"
+            onParsed={handleStudentsParsed}
+            templatePath="/templates/students-template.csv"
+          />
+        </div>
+      )}
+
+      {/* Studio Mode: Show only student dropzone and capacity inputs */}
+      {mode === 'studio' && (
+        <>
+          <div className="grid-row">
+            <Dropzone
+              label="UPLOAD STUDENT SELECTIONS (.CSV)"
+              mode="students"
+              onParsed={handleStudentsParsed}
+              templatePath="/templates/students-template.csv"
+            />
+            <div className="studio-config-card">
+              <div className="studio-config-label">Studio Configuration</div>
+              <div className="studio-config-fields">
+                <div className="studio-config-field">
+                  <label htmlFor="max-students">Max students per studio:</label>
+                  <input
+                    id="max-students"
+                    type="number"
+                    min="1"
+                    value={maxStudentsPerStudio}
+                    onChange={(e) => setMaxStudentsPerStudio(e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+                <div className="studio-config-field">
+                  <label htmlFor="min-students">Min students per studio:</label>
+                  <input
+                    id="min-students"
+                    type="number"
+                    min="0"
+                    value={minStudentsPerStudio}
+                    onChange={(e) => setMinStudentsPerStudio(e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="grid-row">
         <Field

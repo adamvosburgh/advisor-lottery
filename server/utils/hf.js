@@ -75,7 +75,15 @@ Return only the JSON object, no additional text.`;
   try {
     const response = await callModel(systemPrompt, userPrompt, 0);
     const cleaned = response.trim().replace(/```(?:json)?\s*/gi, '').replace(/```\s*$/g, '');
-    const anonymizedConstraints = JSON.parse(cleaned);
+
+    let anonymizedConstraints;
+    try {
+      anonymizedConstraints = JSON.parse(cleaned);
+    } catch (parseError) {
+      console.error('Failed to parse LLM response as JSON:', parseError.message);
+      console.error('Raw response (first 500 chars):', cleaned.substring(0, 500));
+      throw new Error(`LLM returned invalid JSON: ${parseError.message}`);
+    }
 
     // De-anonymize the results before returning
     const deanonymizedConstraints = deanonymizeConstraints(anonymizedConstraints, pseudoToReal);
@@ -201,7 +209,15 @@ Return only the JSON object, no additional text.`;
   try {
     const response = await callModel(systemPrompt, userPrompt, 0);
     const cleaned = response.trim().replace(/```(?:json)?\s*/gi, '').replace(/```\s*$/g, '');
-    const anonymizedValidation = JSON.parse(cleaned);
+
+    let anonymizedValidation;
+    try {
+      anonymizedValidation = JSON.parse(cleaned);
+    } catch (parseError) {
+      console.error('Failed to parse LLM validation response as JSON:', parseError.message);
+      console.error('Raw response (first 500 chars):', cleaned.substring(0, 500));
+      throw new Error(`LLM returned invalid JSON: ${parseError.message}`);
+    }
 
     // De-anonymize the results before returning
     const deanonymizedValidation = deanonymizeValidation(anonymizedValidation, pseudoToReal);

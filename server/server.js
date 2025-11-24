@@ -54,6 +54,9 @@ console.log(`[SERVER] Shared password is ${sharedPassword ? 'SET (length: ' + sh
 
 const app = express();
 
+// Trust proxy for Cloudflare tunnel - trust 1 hop (the tunnel)
+app.set('trust proxy', 1);
+
 app.use(
   cors({
     origin: 'https://lab.adamvosburgh.com'
@@ -65,7 +68,8 @@ const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 20,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  validate: { trustProxy: false } // Disable validation warning for Cloudflare
 });
 app.use(limiter);
 
@@ -264,8 +268,10 @@ app.post('/api/run', async (req, res) => {
         console.log(`    Option ${option.id} has violations:`, validation.violations);
 
         // Try to identify which advisors need adjustment for hard constraint violations
+        // NOTE: conditional_capacity violations (like "minimum X students") should NOT trigger retries
+        // because setting capacity=0 reduces total capacity and makes assignment impossible
         const violatedAdvisors = validation.violations
-          .filter((v) => v.type === 'conditional_capacity' || v.type === 'required_pair')
+          .filter((v) => v.type === 'forbidden_pair' || v.type === 'required_pair')
           .map((v) => v.advisorName)
           .filter(Boolean);
 
