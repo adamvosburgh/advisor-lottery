@@ -12,3 +12,5 @@ DEPLOYMENT.md
 projectinfo.md
 ecosystem.config.js
 .claude/
+analysis/
+venv/

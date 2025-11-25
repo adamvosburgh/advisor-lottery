@@ -635,3 +635,54 @@ body::before {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* Constraint Badges */
+.constraint-badge {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.constraint-badge--satisfied {
+  background: rgba(31, 140, 76, 0.15);
+  color: var(--success-color);
+}
+
+.constraint-badge--violated {
+  background: rgba(185, 56, 79, 0.15);
+  color: var(--error-color);
+}
+
+/* Constraint Violations Display */
+.output-card__violations {
+  padding: 14px 18px;
+  background: rgba(185, 56, 79, 0.08);
+  border-radius: 12px;
+  margin-top: 8px;
+}
+
+.output-card__violations strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--error-color);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.output-card__violations ul {
+  margin: 0;
+  padding-left: 20px;
+  list-style-type: disc;
+}
+
+.output-card__violations li {
+  margin: 4px 0;
+  font-size: 0.8rem;
+  color: var(--text-color);
+  line-height: 1.5;
+}

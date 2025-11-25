@@ -67,7 +67,7 @@ function normalizeAdvisorRows(results) {
   return advisors;
 }
 
-function normalizeStudentRows(results) {
+function normalizeStudentRows(results, lotteryMode = 'advisor') {
   const { data, meta } = results;
   const fields = (meta.fields || []).map((field) => field.trim());
   if (!fields.length) {
@@ -76,25 +76,41 @@ function normalizeStudentRows(results) {
 
   const studentHeader = fields[0];
   const studentHeaderNormalized = normalizeHeader(studentHeader);
-  if (studentHeaderNormalized !== 'student' && studentHeaderNormalized !== 'name') {
-    throw new Error('First column must be "Name" or "Student". See template for correct format.');
+  const isValidStudentHeader =
+    studentHeaderNormalized === 'student' ||
+    studentHeaderNormalized === 'name' ||
+    (lotteryMode === 'studio' && studentHeaderNormalized.includes('pid'));
+
+  if (!isValidStudentHeader) {
+    if (lotteryMode === 'studio') {
+      throw new Error('First column must be "C/PID#", "Name", or "Student". See template for correct format.');
+    } else {
+      throw new Error('First column must be "Name" or "Student". See template for correct format.');
+    }
   }
 
-  // Check if second column is email
-  if (fields.length < 2) {
-    throw new Error('Students CSV needs at least "Name" and "Email" columns, plus preference columns. See template for correct format.');
+  let preferenceStartIndex = 1;
+  const terminology = lotteryMode === 'studio' ? 'studio' : 'advisor';
+
+  // For advisor mode, require email as second column
+  if (lotteryMode === 'advisor') {
+    if (fields.length < 2) {
+      throw new Error('Students CSV needs at least "Name" and "Email" columns, plus preference columns. See template for correct format.');
+    }
+
+    const secondHeader = fields[1];
+    const secondHeaderNormalized = normalizeHeader(secondHeader);
+    if (secondHeaderNormalized !== 'email') {
+      throw new Error('Second column must be "Email". See template for correct format.');
+    }
+
+    preferenceStartIndex = 2; // Skip name and email
   }
 
-  const secondHeader = fields[1];
-  const secondHeaderNormalized = normalizeHeader(secondHeader);
-  if (secondHeaderNormalized !== 'email') {
-    throw new Error('Second column must be "Email". See template for correct format.');
-  }
-
-  // Skip the first two columns (name and email) to get preferences
-  const remainingHeaders = fields.slice(2);
+  // Get preference columns (skip first column and email if advisor mode)
+  const remainingHeaders = fields.slice(preferenceStartIndex);
   if (!remainingHeaders.length) {
-    throw new Error('Students CSV needs at least one advisor preference column after Name and Email. See template for correct format.');
+    throw new Error(`Students CSV needs at least one ${terminology} preference column. See template for correct format.`);
   }
 
   const allGeneric = remainingHeaders.every((header) => isGenericHeader(header));
@@ -163,7 +179,7 @@ function normalizeStudentRows(results) {
   return students;
 }
 
-function Dropzone({ label, mode, onParsed, templatePath }) {
+function Dropzone({ label, mode, lotteryMode, onParsed, templatePath }) {
   const inputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState('');
@@ -187,7 +203,7 @@ function Dropzone({ label, mode, onParsed, templatePath }) {
             const payload =
               mode === 'advisors'
                 ? normalizeAdvisorRows(results)
-                : normalizeStudentRows(results);
+                : normalizeStudentRows(results, lotteryMode);
             onParsed(payload);
             setFileName(file.name);
             setError('');
@@ -202,7 +218,7 @@ function Dropzone({ label, mode, onParsed, templatePath }) {
         }
       });
     },
-    [mode, onParsed]
+    [mode, lotteryMode, onParsed]
   );
 
   const handleFiles = useCallback(

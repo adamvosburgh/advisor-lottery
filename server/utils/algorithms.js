@@ -9,6 +9,44 @@ function normalizeKey(value) {
   return value.trim().toLowerCase();
 }
 
+/**
+ * Extract minimum capacity from advisor notes
+ * Looks for patterns like "minimum 8 students", "min 8", etc.
+ */
+function extractMinimumCapacity(notes) {
+  if (!notes) return 0;
+  const match = notes.match(/min(?:imum)?\s+(\d+)/i);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+/**
+ * Check if assignment is mathematically feasible given min/max constraints
+ * Returns: { feasible: boolean, reason?: string }
+ */
+function checkFeasibility(students, advisors, mode = 'advisor') {
+  const totalStudents = students.length;
+  const totalMaxCapacity = advisors.reduce((sum, a) => sum + a.capacity, 0);
+  const totalMinCapacity = advisors.reduce((sum, a) => sum + (a.minCapacity || 0), 0);
+  const terminology = mode === 'studio' ? 'studio' : 'advisor';
+  const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
+
+  if (totalStudents > totalMaxCapacity) {
+    return {
+      feasible: false,
+      reason: `Cannot assign ${totalStudents} students: total maximum capacity is only ${totalMaxCapacity}. Please increase ${terminology} capacities or reduce student count.`
+    };
+  }
+
+  if (totalStudents < totalMinCapacity) {
+    return {
+      feasible: false,
+      reason: `Cannot assign ${totalStudents} students: total minimum capacity requirement is ${totalMinCapacity}. Please reduce minimum requirements or increase student count.`
+    };
+  }
+
+  return { feasible: true };
+}
+
 function calculateSummaryStats(assignments) {
   if (assignments.length === 0) {
     return {
@@ -37,14 +75,18 @@ function calculateSummaryStats(assignments) {
  * 2. For overloaded advisors, move students with best alternatives
  * 3. Repeat until all capacity constraints are met
  */
-function runWaterFillingAlgorithm(students, advisors, parameters = '') {
+function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'advisor') {
   // Build lookup maps
   const advisorMap = new Map();
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
+    const minCapacity = advisor.minCapacity !== undefined
+      ? advisor.minCapacity
+      : extractMinimumCapacity(advisor.notes || '');
     advisorMap.set(key, {
       name: advisor.name,
       capacity: advisor.capacity,
+      minCapacity: minCapacity,
       notes: advisor.notes || '',
       assigned: []
     });
@@ -60,6 +102,23 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '') {
       currentRank: null
     });
   });
+
+  // Check feasibility
+  const feasibility = checkFeasibility(students, Array.from(advisorMap.values()), mode);
+  if (!feasibility.feasible) {
+    return {
+      error: feasibility.reason,
+      assignments: [],
+      summary: {
+        algorithm: 'Water-Filling (Overflow Redistribution)',
+        averagePlacement: 0,
+        percentFirstChoice: 0,
+        lowestPlacement: 0,
+        notes: `Infeasible: ${feasibility.reason}`,
+        strategyUsed: 'Balanced Minimax - Minimizes worst-case placement'
+      }
+    };
+  }
 
   // Initial assignment: everyone gets first choice
   studentPreferences.forEach((student) => {
@@ -160,6 +219,86 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '') {
     if (!madeChange) break;
   }
 
+  // Phase 3: Ensure minimum capacity constraints
+  iteration = 0;
+  while (iteration < MAX_ITERATIONS) {
+    let madeChange = false;
+    iteration += 1;
+
+    // Find advisors below minimum capacity
+    for (const [underassignedKey, underassignedAdvisor] of advisorMap.entries()) {
+      const shortfall = underassignedAdvisor.minCapacity - underassignedAdvisor.assigned.length;
+
+      if (shortfall > 0) {
+        // Need to move students TO this underassigned advisor
+        // Find donor advisors (those above their minimum or at max capacity)
+        let bestDonorStudent = null;
+        let bestDonorAdvisorKey = null;
+        let bestRankInUnderassigned = Infinity;
+
+        for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
+          if (donorKey === underassignedKey) continue;
+
+          // Donor must be above their minimum (or have no minimum)
+          if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
+
+          // Look through students assigned to donor
+          for (const studentName of donorAdvisor.assigned) {
+            const studentKey = normalizeKey(studentName);
+            const student = studentPreferences.get(studentKey);
+            if (!student) continue;
+
+            // Check if student ranked underassigned advisor
+            const rankInUnderassigned = student.preferences.indexOf(underassignedKey);
+            if (rankInUnderassigned >= 0 && rankInUnderassigned + 1 < bestRankInUnderassigned) {
+              bestRankInUnderassigned = rankInUnderassigned + 1;
+              bestDonorStudent = student;
+              bestDonorAdvisorKey = donorKey;
+            }
+          }
+        }
+
+        // If no student prefers underassigned advisor, take anyone from a donor above minimum
+        if (!bestDonorStudent) {
+          for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
+            if (donorKey === underassignedKey) continue;
+            if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
+            if (donorAdvisor.assigned.length > 0) {
+              const studentName = donorAdvisor.assigned[0];
+              const studentKey = normalizeKey(studentName);
+              bestDonorStudent = studentPreferences.get(studentKey);
+              bestDonorAdvisorKey = donorKey;
+              bestRankInUnderassigned = 999; // Unranked/forced assignment
+              break;
+            }
+          }
+        }
+
+        // Move student from donor to underassigned
+        if (bestDonorStudent && bestDonorAdvisorKey) {
+          const donorAdvisor = advisorMap.get(bestDonorAdvisorKey);
+
+          // Remove from donor
+          donorAdvisor.assigned = donorAdvisor.assigned.filter(
+            (name) => normalizeKey(name) !== normalizeKey(bestDonorStudent.name)
+          );
+
+          // Add to underassigned
+          underassignedAdvisor.assigned.push(bestDonorStudent.name);
+
+          // Update student
+          bestDonorStudent.currentAdvisor = underassignedKey;
+          bestDonorStudent.currentRank = bestRankInUnderassigned;
+
+          madeChange = true;
+          break; // Re-evaluate all advisors
+        }
+      }
+    }
+
+    if (!madeChange) break;
+  }
+
   // Build final assignments
   const assignments = [];
   studentPreferences.forEach((student) => {
@@ -172,6 +311,22 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '') {
 
   const stats = calculateSummaryStats(assignments);
 
+  // Check for minimum capacity violations
+  const minimumViolations = [];
+  advisorMap.forEach((advisor) => {
+    if (advisor.assigned.length < advisor.minCapacity) {
+      minimumViolations.push({
+        name: advisor.name,
+        current: advisor.assigned.length,
+        minimum: advisor.minCapacity,
+        shortfall: advisor.minCapacity - advisor.assigned.length
+      });
+    }
+  });
+
+  const terminology = mode === 'studio' ? 'studio' : 'advisor';
+  const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
+
   return {
     id: 1,
     assignments,
@@ -180,8 +335,10 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '') {
       averagePlacement: stats.averagePlacement,
       percentFirstChoice: stats.percentFirstChoice,
       lowestPlacement: stats.lowestPlacement,
-      notes: `Minimized worst-case placement by systematically moving students with best alternatives. Converged in ${iteration} iterations.`,
-      strategyUsed: 'Balanced Minimax - Minimizes worst-case placement'
+      notes: `Minimized worst-case placement by systematically moving students with best alternatives among ${terminologyPlural}. Converged in ${iteration} iterations.`,
+      strategyUsed: 'Balanced Minimax - Minimizes worst-case placement',
+      constraintsSatisfied: minimumViolations.length === 0,
+      minimumCapacityViolations: minimumViolations
     }
   };
 }
@@ -190,14 +347,18 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '') {
  * Student-Optimal Deferred Acceptance Algorithm
  * Maximizes first choices while maintaining stability
  */
-function runDeferredAcceptance(students, advisors, parameters = '') {
+function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advisor') {
   // Build lookup maps
   const advisorMap = new Map();
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
+    const minCapacity = advisor.minCapacity !== undefined
+      ? advisor.minCapacity
+      : extractMinimumCapacity(advisor.notes || '');
     advisorMap.set(key, {
       name: advisor.name,
       capacity: advisor.capacity,
+      minCapacity: minCapacity,
       notes: advisor.notes || '',
       tentativeMatches: [] // [{studentName, rank}]
     });
@@ -213,6 +374,23 @@ function runDeferredAcceptance(students, advisors, parameters = '') {
       matched: false
     });
   });
+
+  // Check feasibility
+  const feasibility = checkFeasibility(students, Array.from(advisorMap.values()), mode);
+  if (!feasibility.feasible) {
+    return {
+      error: feasibility.reason,
+      assignments: [],
+      summary: {
+        algorithm: 'Student-Optimal Deferred Acceptance',
+        averagePlacement: 0,
+        percentFirstChoice: 0,
+        lowestPlacement: 0,
+        notes: `Infeasible: ${feasibility.reason}`,
+        strategyUsed: 'Maximize First Choices - Prioritizes number of students getting #1'
+      }
+    };
+  }
 
   // Deferred acceptance loop
   const MAX_ITERATIONS = 10000;
@@ -278,6 +456,70 @@ function runDeferredAcceptance(students, advisors, parameters = '') {
     }
   }
 
+  // Phase 3: Ensure minimum capacity constraints
+  iteration = 0;
+  while (iteration < MAX_ITERATIONS) {
+    let madeChange = false;
+    iteration += 1;
+
+    for (const [underassignedKey, underassignedAdvisor] of advisorMap.entries()) {
+      const shortfall = underassignedAdvisor.minCapacity - underassignedAdvisor.tentativeMatches.length;
+
+      if (shortfall > 0) {
+        // Find a donor advisor above their minimum
+        let bestDonorMatch = null;
+        let bestDonorAdvisorKey = null;
+        let bestRankInUnderassigned = Infinity;
+
+        for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
+          if (donorKey === underassignedKey) continue;
+          if (donorAdvisor.tentativeMatches.length <= donorAdvisor.minCapacity) continue;
+
+          for (const match of donorAdvisor.tentativeMatches) {
+            const student = studentQueue.find((s) => s.name === match.studentName);
+            if (!student) continue;
+
+            const rankInUnderassigned = student.preferences.indexOf(underassignedKey);
+            if (rankInUnderassigned >= 0 && rankInUnderassigned + 1 < bestRankInUnderassigned) {
+              bestRankInUnderassigned = rankInUnderassigned + 1;
+              bestDonorMatch = match;
+              bestDonorAdvisorKey = donorKey;
+            }
+          }
+        }
+
+        if (!bestDonorMatch) {
+          // Take anyone from a donor above minimum
+          for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
+            if (donorKey === underassignedKey) continue;
+            if (donorAdvisor.tentativeMatches.length <= donorAdvisor.minCapacity) continue;
+            if (donorAdvisor.tentativeMatches.length > 0) {
+              bestDonorMatch = donorAdvisor.tentativeMatches[0];
+              bestDonorAdvisorKey = donorKey;
+              bestRankInUnderassigned = 999;
+              break;
+            }
+          }
+        }
+
+        if (bestDonorMatch && bestDonorAdvisorKey) {
+          const donorAdvisor = advisorMap.get(bestDonorAdvisorKey);
+          donorAdvisor.tentativeMatches = donorAdvisor.tentativeMatches.filter(
+            (m) => m.studentName !== bestDonorMatch.studentName
+          );
+          underassignedAdvisor.tentativeMatches.push({
+            studentName: bestDonorMatch.studentName,
+            rank: bestRankInUnderassigned
+          });
+          madeChange = true;
+          break;
+        }
+      }
+    }
+
+    if (!madeChange) break;
+  }
+
   // Build final assignments
   const assignments = [];
   advisorMap.forEach((advisor) => {
@@ -310,6 +552,22 @@ function runDeferredAcceptance(students, advisors, parameters = '') {
 
   const stats = calculateSummaryStats(assignments);
 
+  // Check for minimum capacity violations
+  const minimumViolations = [];
+  advisorMap.forEach((advisor) => {
+    if (advisor.tentativeMatches.length < advisor.minCapacity) {
+      minimumViolations.push({
+        name: advisor.name,
+        current: advisor.tentativeMatches.length,
+        minimum: advisor.minCapacity,
+        shortfall: advisor.minCapacity - advisor.tentativeMatches.length
+      });
+    }
+  });
+
+  const terminology = mode === 'studio' ? 'studio' : 'advisor';
+  const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
+
   return {
     id: 2,
     assignments,
@@ -318,8 +576,10 @@ function runDeferredAcceptance(students, advisors, parameters = '') {
       averagePlacement: stats.averagePlacement,
       percentFirstChoice: stats.percentFirstChoice,
       lowestPlacement: stats.lowestPlacement,
-      notes: `Maximized first-choice assignments through stable matching. Students propose to advisors in preference order.`,
-      strategyUsed: 'Maximize First Choices - Prioritizes number of students getting #1'
+      notes: `Maximized first-choice assignments through stable matching. Students propose to ${terminologyPlural} in preference order.`,
+      strategyUsed: 'Maximize First Choices - Prioritizes number of students getting #1',
+      constraintsSatisfied: minimumViolations.length === 0,
+      minimumCapacityViolations: minimumViolations
     }
   };
 }
@@ -328,9 +588,10 @@ function runDeferredAcceptance(students, advisors, parameters = '') {
  * Check for constraint violations and adjust if needed
  * Returns: { violations: [], adjusted: boolean, adjustedAdvisors: [] }
  */
-function validateConstraints(assignments, advisors, students, parameters = '') {
+function validateConstraints(assignments, advisors, students, parameters = '', mode = 'advisor') {
   const violations = [];
   const advisorCounts = new Map();
+  const terminology = mode === 'studio' ? 'studio' : 'advisor';
 
   // Count assignments per advisor
   assignments.forEach((assignment) => {
@@ -351,17 +612,41 @@ function validateConstraints(assignments, advisors, students, parameters = '') {
           type: 'zero_or_max',
           advisor: advisor.name,
           count,
-          capacity: advisor.capacity
+          capacity: advisor.capacity,
+          message: `${terminology.charAt(0).toUpperCase() + terminology.slice(1)} "${advisor.name}" must have either 0 or ${advisor.capacity} students (currently has ${count})`
         });
         zeroOrMaxViolations.push(advisor);
       }
     }
   });
 
+  // Check minimum capacity constraints
+  const minimumViolations = [];
+  advisors.forEach((advisor) => {
+    const key = normalizeKey(advisor.name);
+    const count = advisorCounts.get(key) || 0;
+    const minCapacity = advisor.minCapacity !== undefined
+      ? advisor.minCapacity
+      : extractMinimumCapacity(advisor.notes || '');
+
+    if (minCapacity > 0 && count < minCapacity && count > 0) {
+      violations.push({
+        type: 'minimum_capacity',
+        advisor: advisor.name,
+        count,
+        minCapacity,
+        shortfall: minCapacity - count,
+        message: `${terminology.charAt(0).toUpperCase() + terminology.slice(1)} "${advisor.name}" is below minimum capacity: ${count}/${minCapacity} students (shortfall: ${minCapacity - count})`
+      });
+      minimumViolations.push(advisor);
+    }
+  });
+
   return {
     violations,
     hasViolations: violations.length > 0,
-    zeroOrMaxViolations
+    zeroOrMaxViolations,
+    minimumViolations
   };
 }
 
@@ -385,14 +670,18 @@ function adjustAdvisorsForRetry(advisors, violatedAdvisors) {
  * Minimizes total "regret" across all students
  * Regret = how far each student is from their top choice
  */
-function runMinimumRegretAlgorithm(students, advisors, parameters = '') {
+function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = 'advisor') {
   // Build lookup maps
   const advisorMap = new Map();
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
+    const minCapacity = advisor.minCapacity !== undefined
+      ? advisor.minCapacity
+      : extractMinimumCapacity(advisor.notes || '');
     advisorMap.set(key, {
       name: advisor.name,
       capacity: advisor.capacity,
+      minCapacity: minCapacity,
       notes: advisor.notes || '',
       assigned: []
     });
@@ -408,6 +697,23 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '') {
       assignedRank: null
     };
   });
+
+  // Check feasibility
+  const feasibility = checkFeasibility(students, Array.from(advisorMap.values()), mode);
+  if (!feasibility.feasible) {
+    return {
+      error: feasibility.reason,
+      assignments: [],
+      summary: {
+        algorithm: 'Minimum Regret (Best Alternative)',
+        averagePlacement: 0,
+        percentFirstChoice: 0,
+        lowestPlacement: 0,
+        notes: `Infeasible: ${feasibility.reason}`,
+        strategyUsed: 'Minimum Regret - Balances overall satisfaction'
+      }
+    };
+  }
 
   // Helper: Count how many available options a student has in their top N choices
   const countAvailableOptions = (student, topN = 5) => {
@@ -530,6 +836,73 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '') {
     if (!improvedRegret) break;
   }
 
+  // Phase 3: Ensure minimum capacity constraints
+  let minCapacityIterations = 0;
+  while (minCapacityIterations < MAX_ITERATIONS) {
+    let madeChange = false;
+    minCapacityIterations += 1;
+
+    for (const [underassignedKey, underassignedAdvisor] of advisorMap.entries()) {
+      const shortfall = underassignedAdvisor.minCapacity - underassignedAdvisor.assigned.length;
+
+      if (shortfall > 0) {
+        // Find a donor advisor above their minimum
+        let bestDonorStudent = null;
+        let bestRankInUnderassigned = Infinity;
+
+        for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
+          if (donorKey === underassignedKey) continue;
+          if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
+
+          for (const studentName of donorAdvisor.assigned) {
+            const student = studentList.find((s) => s.name === studentName);
+            if (!student) continue;
+
+            const rankInUnderassigned = student.preferences.indexOf(underassignedKey);
+            if (rankInUnderassigned >= 0 && rankInUnderassigned + 1 < bestRankInUnderassigned) {
+              bestRankInUnderassigned = rankInUnderassigned + 1;
+              bestDonorStudent = student;
+            }
+          }
+        }
+
+        if (!bestDonorStudent) {
+          // Take anyone from a donor above minimum
+          for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
+            if (donorKey === underassignedKey) continue;
+            if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
+            if (donorAdvisor.assigned.length > 0) {
+              const studentName = donorAdvisor.assigned[0];
+              bestDonorStudent = studentList.find((s) => s.name === studentName);
+              bestRankInUnderassigned = 999;
+              break;
+            }
+          }
+        }
+
+        if (bestDonorStudent) {
+          const oldAdvisorKey = bestDonorStudent.assignedAdvisor;
+          const oldAdvisor = advisorMap.get(oldAdvisorKey);
+
+          // Remove from old advisor
+          oldAdvisor.assigned = oldAdvisor.assigned.filter((n) => n !== bestDonorStudent.name);
+
+          // Add to underassigned
+          underassignedAdvisor.assigned.push(bestDonorStudent.name);
+
+          // Update student
+          bestDonorStudent.assignedAdvisor = underassignedKey;
+          bestDonorStudent.assignedRank = bestRankInUnderassigned;
+
+          madeChange = true;
+          break;
+        }
+      }
+    }
+
+    if (!madeChange) break;
+  }
+
   // Build final assignments
   const assignments = studentList.map((student) => ({
     student: student.name,
@@ -540,6 +913,22 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '') {
   const stats = calculateSummaryStats(assignments);
   const totalRegret = assignments.reduce((sum, a) => sum + (a.rank - 1), 0);
 
+  // Check for minimum capacity violations
+  const minimumViolations = [];
+  advisorMap.forEach((advisor) => {
+    if (advisor.assigned.length < advisor.minCapacity) {
+      minimumViolations.push({
+        name: advisor.name,
+        current: advisor.assigned.length,
+        minimum: advisor.minCapacity,
+        shortfall: advisor.minCapacity - advisor.assigned.length
+      });
+    }
+  });
+
+  const terminology = mode === 'studio' ? 'studio' : 'advisor';
+  const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
+
   return {
     id: 3,
     assignments,
@@ -548,8 +937,10 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '') {
       averagePlacement: stats.averagePlacement,
       percentFirstChoice: stats.percentFirstChoice,
       lowestPlacement: stats.lowestPlacement,
-      notes: `Minimized total regret (sum of distances from top choice) across all students. Total regret: ${totalRegret}. Students with fewer good options were prioritized.`,
-      strategyUsed: 'Minimum Regret - Balances overall satisfaction'
+      notes: `Minimized total regret (sum of distances from top choice) across all students. Total regret: ${totalRegret}. Students with fewer good ${terminology} options were prioritized.`,
+      strategyUsed: 'Minimum Regret - Balances overall satisfaction',
+      constraintsSatisfied: minimumViolations.length === 0,
+      minimumCapacityViolations: minimumViolations
     }
   };
 }

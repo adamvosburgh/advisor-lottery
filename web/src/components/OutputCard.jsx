@@ -1,5 +1,8 @@
-function OutputCard({ option }) {
+function OutputCard({ option, mode = 'advisor' }) {
   const { summary, csvPath, warning } = option;
+  const terminology = mode === 'studio' ? 'studio' : 'advisor';
+  const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
+
   const averagePlacement =
     typeof summary.averagePlacement === 'number'
       ? summary.averagePlacement.toFixed(1)
@@ -10,6 +13,9 @@ function OutputCard({ option }) {
       : '—';
   const lowestPlacement =
     typeof summary.lowestPlacement === 'number' ? summary.lowestPlacement : '—';
+
+  const hasConstraintViolations = summary.minimumCapacityViolations && summary.minimumCapacityViolations.length > 0;
+  const constraintsSatisfied = summary.constraintsSatisfied !== false && !hasConstraintViolations;
 
   const handleDownload = () => {
     if (csvPath) {
@@ -60,7 +66,30 @@ function OutputCard({ option }) {
           <strong>Lowest placement</strong>
           <span>{lowestPlacement}</span>
         </div>
+
+        {mode === 'studio' && (
+          <div className="output-card__line">
+            <strong>Constraints</strong>
+            <span className={constraintsSatisfied ? 'constraint-badge constraint-badge--satisfied' : 'constraint-badge constraint-badge--violated'}>
+              {constraintsSatisfied ? '✓ Satisfied' : '⚠ Violations'}
+            </span>
+          </div>
+        )}
+
         <div className="output-card__notes">{summary.notes}</div>
+
+        {hasConstraintViolations && (
+          <div className="output-card__violations">
+            <strong>Minimum capacity violations:</strong>
+            <ul>
+              {summary.minimumCapacityViolations.map((violation, index) => (
+                <li key={index}>
+                  {terminology.charAt(0).toUpperCase() + terminology.slice(1)} "{violation.name}": {violation.current}/{violation.minimum} students (shortfall: {violation.shortfall})
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
       {warning && <div className="output-card__warning">{warning}</div>}
     </div>

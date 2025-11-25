@@ -25,6 +25,7 @@ const StudentSchema = z
   }));
 
 const RequestSchema = z.object({
+  mode: z.enum(['advisor', 'studio']).optional().default('advisor'),
   advisors: z.array(AdvisorSchema).min(1, 'At least one advisor is required'),
   students: z.array(StudentSchema).min(1, 'At least one student is required'),
   parameters: z.string().optional().transform((value) => (value ? value.trim() : '')),

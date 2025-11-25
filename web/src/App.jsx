@@ -151,6 +151,7 @@ function App() {
     let payload;
     if (mode === 'advisor') {
       payload = {
+        mode: 'advisor',
         advisors,
         students,
         parameters,
@@ -170,6 +171,7 @@ function App() {
       }));
 
       payload = {
+        mode: 'studio',
         advisors: inferredAdvisors,
         students,
         parameters,
@@ -314,12 +316,14 @@ function App() {
           <Dropzone
             label="UPLOAD FACULTY (.CSV)"
             mode="advisors"
+            lotteryMode={mode}
             onParsed={handleAdvisorsParsed}
             templatePath="/templates/advisors-template.csv"
           />
           <Dropzone
             label="UPLOAD STUDENT SELECTIONS (.CSV)"
             mode="students"
+            lotteryMode={mode}
             onParsed={handleStudentsParsed}
             templatePath="/templates/students-template.csv"
           />
@@ -333,6 +337,7 @@ function App() {
             <Dropzone
               label="UPLOAD STUDENT SELECTIONS (.CSV)"
               mode="students"
+              lotteryMode={mode}
               onParsed={handleStudentsParsed}
               templatePath="/templates/students-template.csv"
             />
@@ -427,7 +432,7 @@ function App() {
           </div>
           <div className="output-grid">
             {results.options.map((option) => (
-              <OutputCard key={option.id} option={option} />
+              <OutputCard key={option.id} option={option} mode={mode} />
             ))}
           </div>
         </section>
