@@ -48,6 +48,7 @@ console.log(`[SERVER] dotenv parsed:`, dotenvResult.parsed);
 
 const sharedPassword = process.env.APP_SHARED_PASSWORD;
 const port = process.env.PORT || 4747;
+const jobs = new Map(); // jobId -> { status, result, error }
 
 // eslint-disable-next-line no-console
 console.log(`[SERVER] Shared password is ${sharedPassword ? 'SET (length: ' + sharedPassword.length + ')' : 'NOT SET'}`);
@@ -71,7 +72,15 @@ const limiter = rateLimit({
   legacyHeaders: false,
   validate: { trustProxy: false } // Disable validation warning for Cloudflare
 });
-app.use(limiter);
+
+// Higher ceiling for polling job status; keep stricter limit for mutation endpoints
+const statusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { trustProxy: false }
+});
 
 function serializeZodError(error) {
   if (!error?.issues) {
@@ -86,9 +95,25 @@ function serializeZodError(error) {
   };
 }
 
-async function handleLottery(requestData, lotterySlug, res, mode) {
+function createJobId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+async function runJob(jobId, requestData, lotterySlug, mode) {
+  jobs.set(jobId, { status: 'running' });
+  try {
+    const result = await handleLottery(requestData, lotterySlug, mode);
+    jobs.set(jobId, { status: 'succeeded', result });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`[JOB ${jobId}] failed:`, error);
+    jobs.set(jobId, { status: 'failed', error: error.message || 'Job failed' });
+  }
+}
+
+async function handleLottery(requestData, lotterySlug, mode) {
   // eslint-disable-next-line no-console
-  console.log(`\nRunning ${mode} lottery for ${lotterySlug}...`);
+  console.log(`\n[JOB] Running ${mode} lottery for ${lotterySlug}...`);
 
   const { realToPseudo, pseudoToReal, salt } = createNameMapping(
     requestData.advisors,
@@ -185,11 +210,8 @@ async function handleLottery(requestData, lotterySlug, res, mode) {
       commentary: validation.commentary || []
     };
 
-    const userSummary = validation.userFacingSummary ? `${validation.userFacingSummary} ` : '';
-    const constraintSentence = validation.isValid
-      ? `LLM check: no hard violations; ${validation.warnings?.length || 0} warning(s).`
-      : `LLM check: hard violations detected (${validation.violations.length}).`;
-    finalOptions[i].summary.notes = `${finalOptions[i].summary.notes} ${userSummary}${constraintSentence}`.trim();
+    // Keep deterministic note; LLM summaries tend to be noisy
+    finalOptions[i].summary.notes = finalOptions[i].summary.notes;
 
     if (!validation.isValid && validation.violations.length > 0) {
       // eslint-disable-next-line no-console
@@ -239,11 +261,7 @@ async function handleLottery(requestData, lotterySlug, res, mode) {
             commentary: revalidation.commentary || []
           };
 
-          const retryUserSummary = revalidation.userFacingSummary ? `${revalidation.userFacingSummary} ` : '';
-          const retryConstraintSentence = revalidation.isValid
-            ? `LLM check: no hard violations; ${revalidation.warnings?.length || 0} warning(s).`
-            : `LLM check: hard violations detected (${revalidation.violations.length}).`;
-          finalOptions[i].summary.notes = `${finalOptions[i].summary.notes} ${retryUserSummary}${retryConstraintSentence}`.trim();
+          finalOptions[i].summary.notes = finalOptions[i].summary.notes;
         }
       }
     }
@@ -300,7 +318,7 @@ async function handleLottery(requestData, lotterySlug, res, mode) {
   // eslint-disable-next-line no-console
   console.log('  ✓ Complete!\n');
 
-  const responsePayload = {
+  return {
     lotterySlug,
     mode,
     options: finalOptions.map((option) => ({
@@ -310,11 +328,9 @@ async function handleLottery(requestData, lotterySlug, res, mode) {
       warning: null
     }))
   };
-
-  return res.json(responsePayload);
 }
 
-app.post('/api/run', async (req, res) => {
+app.post('/api/run', limiter, async (req, res) => {
   try {
     if (sharedPassword) {
       const provided = req.headers['x-app-pass'];
@@ -343,13 +359,38 @@ app.post('/api/run', async (req, res) => {
     await ensureOutputsDir();
 
     const mode = requestData.mode === 'studio' ? 'studio' : 'advisor';
-    return handleLottery(requestData, lotterySlug, res, mode);
+    const jobId = createJobId();
+    jobs.set(jobId, { status: 'queued' });
+    runJob(jobId, requestData, lotterySlug, mode);
 
+    return res.status(202).json({ jobId, status: 'queued' });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error(error);
     return res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+app.get('/api/run/:jobId', statusLimiter, (req, res) => {
+  if (sharedPassword) {
+    const provided = req.headers['x-app-pass'];
+    if (!provided || provided !== sharedPassword) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
+
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  if (job.status === 'succeeded') {
+    return res.json({ status: 'succeeded', result: job.result });
+  }
+  if (job.status === 'failed') {
+    return res.json({ status: 'failed', error: job.error || 'Job failed' });
+  }
+  return res.json({ status: job.status });
 });
 
 app.get('/api/provider', (req, res) => {

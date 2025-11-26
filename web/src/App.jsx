@@ -22,7 +22,7 @@ function App() {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
-  const [provider, setProvider] = useState('ollama'); // 'ollama' or 'huggingface'
+  const [provider, setProvider] = useState('huggingface'); // 'ollama' or 'huggingface'
   const [loadingProvider, setLoadingProvider] = useState(true);
 
   const handleAdvisorsParsed = useCallback((data) => {
@@ -35,7 +35,11 @@ function App() {
 
   const fetchProvider = useCallback(async () => {
     try {
-      const response = await fetch('/api/provider');
+      const headers = {};
+      if (appPassword) {
+        headers['x-app-pass'] = appPassword;
+      }
+      const response = await fetch('/api/provider', { headers });
       if (response.ok) {
         const data = await response.json();
         setProvider(data.provider);
@@ -45,7 +49,7 @@ function App() {
     } finally {
       setLoadingProvider(false);
     }
-  }, []);
+  }, [appPassword]);
 
   const handleProviderToggle = useCallback(async (newProvider) => {
     try {
@@ -95,34 +99,61 @@ function App() {
         headers['x-app-pass'] = appPassword;
       }
 
-      let response;
-      try {
-        response = await fetch('/api/run', {
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const startJob = async () => {
+        const response = await fetch('/api/run', {
           method: 'POST',
           headers,
           body: JSON.stringify(payload)
         });
-      } catch (err) {
-        throw new Error('Failed to reach the server. Is the backend running?');
-      }
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          const message =
+            body?.error?.message ||
+            body?.error ||
+            'Server rejected the request. Please verify the inputs.';
+          throw new Error(message);
+        }
+        if (!body?.jobId) {
+          throw new Error('Job did not start. Please try again.');
+        }
+        return body.jobId;
+      };
 
-      let body = null;
+      const pollJob = async (jobId) => {
+        const pollHeaders = { ...headers };
+        let attempts = 0;
+        const maxAttempts = 300; // ~10 minutes at 2s intervals
+        while (attempts < maxAttempts) {
+          const resp = await fetch(`/api/run/${jobId}`, { headers: pollHeaders });
+          const data = await resp.json().catch(() => null);
+          if (resp.status === 401) {
+            throw new Error('Unauthorized. Check the password and try again.');
+          }
+          if (!resp.ok) {
+            const msg = data?.error || 'Job failed to start.';
+            throw new Error(msg);
+          }
+          if (data?.status === 'succeeded' && data.result) {
+            return data.result;
+          }
+          if (data?.status === 'failed') {
+            throw new Error(data?.error || 'Job failed.');
+          }
+          attempts += 1;
+          await wait(2000);
+        }
+        throw new Error('Job timed out. Please try again on Fast mode or retry.');
+      };
+
       try {
-        body = await response.json();
+        const jobId = await startJob();
+        const result = await pollJob(jobId);
+        setResults(result);
       } catch (err) {
-        // ignore JSON parse errors; body stays null
+        throw err;
       }
-
-      if (!response.ok) {
-        const message =
-          body?.error?.message ||
-          body?.error ||
-          'Server rejected the request. Please verify the inputs.';
-        throw new Error(message);
-      }
-
-      setResults(body);
-      return true;
     },
     [appPassword]
   );
@@ -215,10 +246,11 @@ function App() {
       setIsAuthenticated(true);
       setPasswordError('');
       setPasswordInput('');
+      fetchProvider();
     } catch (err) {
       setPasswordError('Failed to verify password. Please try again.');
     }
-  }, [passwordInput]);
+  }, [passwordInput, fetchProvider]);
 
   const handleSplashPasswordKeyPress = useCallback((event) => {
     if (event.key === 'Enter') {
@@ -231,13 +263,13 @@ function App() {
   // Fetch initial provider on mount
   useEffect(() => {
     fetchProvider();
-  }, [fetchProvider]);
+  }, [fetchProvider, appPassword]);
 
   const speedInfo = useMemo(() => {
     if (provider === 'ollama') {
       return {
         label: 'Slow',
-        description: 'Uses a lightweight (llama 3.1:8B) LLM on Adam\'s home server. Will take approx 5min. Low energy + Free.'
+        description: 'Uses a lightweight (llama 3.1:8B) LLM on Adam\'s home server. Will take approx 10min. Low energy + Free, but struggles with complex lotteries (like adv v + vi)'
       };
     }
     return {
@@ -286,28 +318,24 @@ function App() {
 
       {/* Mode Selector */}
       <div className="mode-selector">
-        <label>
-          <input
-            type="radio"
-            name="mode"
-            value="advisor"
-            checked={mode === 'advisor'}
-            onChange={(e) => setMode(e.target.value)}
+        <div className="mode-buttons">
+          <button
+            type="button"
+            className={`mode-button ${mode === 'advisor' ? 'mode-button--active' : ''}`}
+            onClick={() => setMode('advisor')}
             disabled={loading}
-          />
-          <span>CDP Advisor Lottery</span>
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="mode"
-            value="studio"
-            checked={mode === 'studio'}
-            onChange={(e) => setMode(e.target.value)}
+          >
+            CDP Advisor Lottery
+          </button>
+          <button
+            type="button"
+            className={`mode-button ${mode === 'studio' ? 'mode-button--active' : ''}`}
+            onClick={() => setMode('studio')}
             disabled={loading}
-          />
-          <span>Architecture Studio Lottery</span>
-        </label>
+          >
+            Architecture Studio Lottery
+          </button>
+        </div>
       </div>
 
       {/* Advisor Mode: Show both dropzones */}
