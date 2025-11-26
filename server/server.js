@@ -86,17 +86,49 @@ function serializeZodError(error) {
   };
 }
 
-async function handleAdvisorLottery(requestData, lotterySlug, res) {
+async function handleLottery(requestData, lotterySlug, res, mode) {
   // eslint-disable-next-line no-console
-  console.log(`\nRunning advisor lottery for ${lotterySlug}...`);
+  console.log(`\nRunning ${mode} lottery for ${lotterySlug}...`);
 
-  // Create name mapping for anonymization with random salt
   const { realToPseudo, pseudoToReal, salt } = createNameMapping(
     requestData.advisors,
     requestData.students
   );
 
-  const mode = 'advisor';
+  const algorithms = [
+    { id: 1, runner: runWaterFillingAlgorithm },
+    { id: 2, runner: runDeferredAcceptance },
+    { id: 3, runner: runMinimumRegretAlgorithm }
+  ];
+
+  const runAlgorithmWithRetry = (runner) => {
+    let option = runner(requestData.students, requestData.advisors, requestData.parameters, mode);
+    const constraints = validateConstraints(
+      option.assignments,
+      requestData.advisors,
+      requestData.students,
+      requestData.parameters,
+      mode
+    );
+
+    if (constraints.hasViolations && constraints.zeroOrMaxViolations.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log('    Constraint violation detected, adjusting and retrying...');
+      const adjustedAdvisors = adjustAdvisorsForRetry(
+        requestData.advisors,
+        constraints.zeroOrMaxViolations
+      );
+      option = runner(requestData.students, adjustedAdvisors, requestData.parameters, mode);
+    }
+
+    return option;
+  };
+
+  const reRunWithAdjustedAdvisors = (optionId, adjustedAdvisors) => {
+    const runner = algorithms.find((a) => a.id === optionId)?.runner;
+    if (!runner) return null;
+    return runner(requestData.students, adjustedAdvisors, requestData.parameters, mode);
+  };
 
   // STEP 0: Extract constraints using LLM
   // eslint-disable-next-line no-console
@@ -111,112 +143,22 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
   const extractedConstraints = extractionResult.constraints;
   const extractionLLMPayload = extractionResult.llmPayload;
 
-  // STEP 1: Run Water-Filling Algorithm (Option 1)
-  // eslint-disable-next-line no-console
-  console.log('  [1/3] Running water-filling algorithm (minimax)...');
-  let option1 = runWaterFillingAlgorithm(
-    requestData.students,
-    requestData.advisors,
-    requestData.parameters,
-      mode
-  );
-
-  // Check for constraint violations and retry if needed
-  let constraints1 = validateConstraints(
-    option1.assignments,
-    requestData.advisors,
-    requestData.students,
-    requestData.parameters,
-      mode
-  );
-
-  if (constraints1.hasViolations && constraints1.zeroOrMaxViolations.length > 0) {
+  // STEP 1–3: Run algorithms with constraint retries
+  const finalOptions = [];
+  const labels = [
+    '[1/3] Running water-filling algorithm (minimax)...',
+    '[2/3] Running deferred acceptance algorithm (greedy)...',
+    '[3/3] Running minimum regret algorithm...'
+  ];
+  for (let i = 0; i < algorithms.length; i += 1) {
     // eslint-disable-next-line no-console
-    console.log('    Constraint violation detected, adjusting and retrying...');
-    const adjustedAdvisors = adjustAdvisorsForRetry(
-      requestData.advisors,
-      constraints1.zeroOrMaxViolations
-    );
-    option1 = runWaterFillingAlgorithm(
-      requestData.students,
-      adjustedAdvisors,
-      requestData.parameters,
-      mode
-    );
-  }
-
-  // STEP 2: Run Deferred Acceptance (Option 2)
-  // eslint-disable-next-line no-console
-  console.log('  [2/3] Running deferred acceptance algorithm (greedy)...');
-  let option2 = runDeferredAcceptance(
-    requestData.students,
-    requestData.advisors,
-    requestData.parameters,
-      mode
-  );
-
-  // Check for constraint violations and retry if needed
-  let constraints2 = validateConstraints(
-    option2.assignments,
-    requestData.advisors,
-    requestData.students,
-    requestData.parameters,
-      mode
-  );
-
-  if (constraints2.hasViolations && constraints2.zeroOrMaxViolations.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log('    Constraint violation detected, adjusting and retrying...');
-    const adjustedAdvisors = adjustAdvisorsForRetry(
-      requestData.advisors,
-      constraints2.zeroOrMaxViolations
-    );
-    option2 = runDeferredAcceptance(
-      requestData.students,
-      adjustedAdvisors,
-      requestData.parameters,
-      mode
-    );
-  }
-
-  // STEP 3: Run Minimum Regret Algorithm (Option 3)
-  // eslint-disable-next-line no-console
-  console.log('  [3/3] Running minimum regret algorithm...');
-  let option3 = runMinimumRegretAlgorithm(
-    requestData.students,
-    requestData.advisors,
-    requestData.parameters,
-      mode
-  );
-
-  // Check for constraint violations and retry if needed
-  let constraints3 = validateConstraints(
-    option3.assignments,
-    requestData.advisors,
-    requestData.students,
-    requestData.parameters,
-      mode
-  );
-
-  if (constraints3.hasViolations && constraints3.zeroOrMaxViolations.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log('    Constraint violation detected, adjusting and retrying...');
-    const adjustedAdvisors = adjustAdvisorsForRetry(
-      requestData.advisors,
-      constraints3.zeroOrMaxViolations
-    );
-    option3 = runMinimumRegretAlgorithm(
-      requestData.students,
-      adjustedAdvisors,
-      requestData.parameters,
-      mode
-    );
+    console.log(`  ${labels[i]}`);
+    finalOptions.push(runAlgorithmWithRetry(algorithms[i].runner));
   }
 
   // STEP 4: LLM Validation of all three options
   // eslint-disable-next-line no-console
   console.log('  [4/4] Validating assignments with LLM...');
-  const finalOptions = [option1, option2, option3];
   const validationLLMPayloads = [];
 
   for (let i = 0; i < finalOptions.length; i += 1) {
@@ -238,24 +180,21 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
       payload: validationResult.llmPayload
     });
 
-    // Attach validation results to the option for frontend display
     finalOptions[i].validation = {
       warnings: validation.warnings || [],
       commentary: validation.commentary || []
     };
 
-    // Replace technical notes with user-facing summary if available
-    if (validation.userFacingSummary) {
-      finalOptions[i].summary.notes = validation.userFacingSummary;
-    }
+    const userSummary = validation.userFacingSummary ? `${validation.userFacingSummary} ` : '';
+    const constraintSentence = validation.isValid
+      ? `LLM check: no hard violations; ${validation.warnings?.length || 0} warning(s).`
+      : `LLM check: hard violations detected (${validation.violations.length}).`;
+    finalOptions[i].summary.notes = `${finalOptions[i].summary.notes} ${userSummary}${constraintSentence}`.trim();
 
     if (!validation.isValid && validation.violations.length > 0) {
       // eslint-disable-next-line no-console
       console.log(`    Option ${option.id} has violations:`, validation.violations);
 
-      // Try to identify which advisors need adjustment for hard constraint violations
-      // NOTE: conditional_capacity violations (like "minimum X students") should NOT trigger retries
-      // because setting capacity=0 reduces total capacity and makes assignment impossible
       const violatedAdvisors = validation.violations
         .filter((v) => v.type === 'forbidden_pair' || v.type === 'required_pair')
         .map((v) => v.advisorName)
@@ -265,7 +204,6 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
         // eslint-disable-next-line no-console
         console.log(`    Retrying Option ${option.id} with adjusted constraints...`);
 
-        // Set violating advisors to capacity 0
         const adjustedAdvisors = requestData.advisors.map((advisor) => {
           if (violatedAdvisors.includes(advisor.name)) {
             return { ...advisor, capacity: 0 };
@@ -273,63 +211,43 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
           return advisor;
         });
 
-        // Re-run the algorithm
-        if (option.id === 1) {
-          finalOptions[i] = runWaterFillingAlgorithm(
+        const retriedOption = reRunWithAdjustedAdvisors(option.id, adjustedAdvisors);
+
+        if (retriedOption) {
+          finalOptions[i] = retriedOption;
+
+          const revalidationResult = await validateAssignments(
+            requestData.advisors,
             requestData.students,
-            adjustedAdvisors,
             requestData.parameters,
-      mode
+            finalOptions[i].assignments,
+            extractedConstraints,
+            realToPseudo,
+            pseudoToReal,
+            mode
           );
-        } else if (option.id === 2) {
-          finalOptions[i] = runDeferredAcceptance(
-            requestData.students,
-            adjustedAdvisors,
-            requestData.parameters,
-      mode
-          );
-        } else if (option.id === 3) {
-          finalOptions[i] = runMinimumRegretAlgorithm(
-            requestData.students,
-            adjustedAdvisors,
-            requestData.parameters,
-      mode
-          );
-        }
 
-        // Re-validate after retry
-        const revalidationResult = await validateAssignments(
-          requestData.advisors,
-          requestData.students,
-          requestData.parameters,
-          finalOptions[i].assignments,
-          extractedConstraints,
-          realToPseudo,
-          pseudoToReal,
-      mode
-        );
+          const revalidation = revalidationResult.validation;
+          validationLLMPayloads[i] = {
+            optionId: option.id,
+            payload: revalidationResult.llmPayload,
+            retried: true
+          };
 
-        const revalidation = revalidationResult.validation;
-        // Update the validation payload with retry data
-        validationLLMPayloads[i] = {
-          optionId: option.id,
-          payload: revalidationResult.llmPayload,
-          retried: true
-        };
+          finalOptions[i].validation = {
+            warnings: revalidation.warnings || [],
+            commentary: revalidation.commentary || []
+          };
 
-        finalOptions[i].validation = {
-          warnings: revalidation.warnings || [],
-          commentary: revalidation.commentary || []
-        };
-
-        // Replace technical notes with user-facing summary if available
-        if (revalidation.userFacingSummary) {
-          finalOptions[i].summary.notes = revalidation.userFacingSummary;
+          const retryUserSummary = revalidation.userFacingSummary ? `${revalidation.userFacingSummary} ` : '';
+          const retryConstraintSentence = revalidation.isValid
+            ? `LLM check: no hard violations; ${revalidation.warnings?.length || 0} warning(s).`
+            : `LLM check: hard violations detected (${revalidation.violations.length}).`;
+          finalOptions[i].summary.notes = `${finalOptions[i].summary.notes} ${retryUserSummary}${retryConstraintSentence}`.trim();
         }
       }
     }
 
-    // Log warnings and commentary
     if (validation.warnings && validation.warnings.length > 0) {
       // eslint-disable-next-line no-console
       console.log(`    Option ${option.id} has ${validation.warnings.length} warning(s)`);
@@ -340,7 +258,6 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
     }
   }
 
-  // Log results
   const promptLog = {
     timestamp: new Date().toISOString(),
     approach: 'Three Deterministic Algorithms with LLM Constraint Extraction & Validation',
@@ -353,7 +270,6 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
 
   await writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_prompt.json`), promptLog);
 
-  // Write anonymized LLM payloads for transparency
   const anonymizationLog = {
     timestamp: new Date().toISOString(),
     description:
@@ -372,11 +288,10 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
     validations: validationLLMPayloads
   };
 
-  // Write output files
   const outputWritePromises = finalOptions.map((option) =>
     writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_output${option.id}.json`), option)
   );
-  outputWritePromises.push(saveOptionCSVs(lotterySlug, finalOptions, 'advisor'));
+  outputWritePromises.push(saveOptionCSVs(lotterySlug, finalOptions, mode));
   outputWritePromises.push(
     writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_llm-payloads.json`), anonymizationLog)
   );
@@ -387,320 +302,7 @@ async function handleAdvisorLottery(requestData, lotterySlug, res) {
 
   const responsePayload = {
     lotterySlug,
-    mode: 'advisor',
-    options: finalOptions.map((option) => ({
-      id: option.id,
-      summary: option.summary,
-      csvPath: `/download/${lotterySlug}_output${option.id}.csv`,
-      warning: null
-    }))
-  };
-
-  return res.json(responsePayload);
-}
-
-async function handleStudioLottery(requestData, lotterySlug, res) {
-  // eslint-disable-next-line no-console
-  console.log(`\nRunning studio lottery for ${lotterySlug}...`);
-
-  // Create name mapping for anonymization with random salt
-  const { realToPseudo, pseudoToReal, salt } = createNameMapping(
-    requestData.advisors,
-    requestData.students
-  );
-
-  const mode = 'studio';
-
-  // STEP 0: Extract constraints using LLM
-  // eslint-disable-next-line no-console
-  console.log('  [0/3] Extracting constraints from natural language...');
-  const extractionResult = await extractConstraints(
-    requestData.advisors,
-    requestData.parameters,
-    realToPseudo,
-    pseudoToReal,
-    mode
-  );
-  const extractedConstraints = extractionResult.constraints;
-  const extractionLLMPayload = extractionResult.llmPayload;
-
-  // STEP 1: Run Water-Filling Algorithm (Option 1)
-  // eslint-disable-next-line no-console
-  console.log('  [1/3] Running water-filling algorithm (minimax)...');
-  let option1 = runWaterFillingAlgorithm(
-    requestData.students,
-    requestData.advisors,
-    requestData.parameters,
-      mode
-  );
-
-  // Check for constraint violations and retry if needed
-  let constraints1 = validateConstraints(
-    option1.assignments,
-    requestData.advisors,
-    requestData.students,
-    requestData.parameters,
-      mode
-  );
-
-  if (constraints1.hasViolations && constraints1.zeroOrMaxViolations.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log('    Constraint violation detected, adjusting and retrying...');
-    const adjustedAdvisors = adjustAdvisorsForRetry(
-      requestData.advisors,
-      constraints1.zeroOrMaxViolations
-    );
-    option1 = runWaterFillingAlgorithm(
-      requestData.students,
-      adjustedAdvisors,
-      requestData.parameters,
-      mode
-    );
-  }
-
-  // STEP 2: Run Deferred Acceptance (Option 2)
-  // eslint-disable-next-line no-console
-  console.log('  [2/3] Running deferred acceptance algorithm (greedy)...');
-  let option2 = runDeferredAcceptance(
-    requestData.students,
-    requestData.advisors,
-    requestData.parameters,
-      mode
-  );
-
-  // Check for constraint violations and retry if needed
-  let constraints2 = validateConstraints(
-    option2.assignments,
-    requestData.advisors,
-    requestData.students,
-    requestData.parameters,
-      mode
-  );
-
-  if (constraints2.hasViolations && constraints2.zeroOrMaxViolations.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log('    Constraint violation detected, adjusting and retrying...');
-    const adjustedAdvisors = adjustAdvisorsForRetry(
-      requestData.advisors,
-      constraints2.zeroOrMaxViolations
-    );
-    option2 = runDeferredAcceptance(
-      requestData.students,
-      adjustedAdvisors,
-      requestData.parameters,
-      mode
-    );
-  }
-
-  // STEP 3: Run Minimum Regret Algorithm (Option 3)
-  // eslint-disable-next-line no-console
-  console.log('  [3/3] Running minimum regret algorithm...');
-  let option3 = runMinimumRegretAlgorithm(
-    requestData.students,
-    requestData.advisors,
-    requestData.parameters,
-      mode
-  );
-
-  // Check for constraint violations and retry if needed
-  let constraints3 = validateConstraints(
-    option3.assignments,
-    requestData.advisors,
-    requestData.students,
-    requestData.parameters,
-      mode
-  );
-
-  if (constraints3.hasViolations && constraints3.zeroOrMaxViolations.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log('    Constraint violation detected, adjusting and retrying...');
-    const adjustedAdvisors = adjustAdvisorsForRetry(
-      requestData.advisors,
-      constraints3.zeroOrMaxViolations
-    );
-    option3 = runMinimumRegretAlgorithm(
-      requestData.students,
-      adjustedAdvisors,
-      requestData.parameters,
-      mode
-    );
-  }
-
-  // STEP 4: LLM Validation of all three options
-  // eslint-disable-next-line no-console
-  console.log('  [4/4] Validating assignments with LLM...');
-  const finalOptions = [option1, option2, option3];
-  const validationLLMPayloads = [];
-
-  for (let i = 0; i < finalOptions.length; i += 1) {
-    const option = finalOptions[i];
-    const validationResult = await validateAssignments(
-      requestData.advisors,
-      requestData.students,
-      requestData.parameters,
-      option.assignments,
-      extractedConstraints,
-      realToPseudo,
-      pseudoToReal,
-      mode
-    );
-
-    const validation = validationResult.validation;
-    validationLLMPayloads.push({
-      optionId: option.id,
-      payload: validationResult.llmPayload
-    });
-
-    // Attach validation results to the option for frontend display
-    finalOptions[i].validation = {
-      warnings: validation.warnings || [],
-      commentary: validation.commentary || []
-    };
-
-    // Replace technical notes with user-facing summary if available
-    if (validation.userFacingSummary) {
-      finalOptions[i].summary.notes = validation.userFacingSummary;
-    }
-
-    if (!validation.isValid && validation.violations.length > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`    Option ${option.id} has violations:`, validation.violations);
-
-      // Try to identify which advisors need adjustment for hard constraint violations
-      // NOTE: conditional_capacity violations (like "minimum X students") should NOT trigger retries
-      // because setting capacity=0 reduces total capacity and makes assignment impossible
-      const violatedAdvisors = validation.violations
-        .filter((v) => v.type === 'forbidden_pair' || v.type === 'required_pair')
-        .map((v) => v.advisorName)
-        .filter(Boolean);
-
-      if (violatedAdvisors.length > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`    Retrying Option ${option.id} with adjusted constraints...`);
-
-        // Set violating advisors to capacity 0
-        const adjustedAdvisors = requestData.advisors.map((advisor) => {
-          if (violatedAdvisors.includes(advisor.name)) {
-            return { ...advisor, capacity: 0 };
-          }
-          return advisor;
-        });
-
-        // Re-run the algorithm
-        if (option.id === 1) {
-          finalOptions[i] = runWaterFillingAlgorithm(
-            requestData.students,
-            adjustedAdvisors,
-            requestData.parameters,
-      mode
-          );
-        } else if (option.id === 2) {
-          finalOptions[i] = runDeferredAcceptance(
-            requestData.students,
-            adjustedAdvisors,
-            requestData.parameters,
-      mode
-          );
-        } else if (option.id === 3) {
-          finalOptions[i] = runMinimumRegretAlgorithm(
-            requestData.students,
-            adjustedAdvisors,
-            requestData.parameters,
-      mode
-          );
-        }
-
-        // Re-validate after retry
-        const revalidationResult = await validateAssignments(
-          requestData.advisors,
-          requestData.students,
-          requestData.parameters,
-          finalOptions[i].assignments,
-          extractedConstraints,
-          realToPseudo,
-          pseudoToReal,
-      mode
-        );
-
-        const revalidation = revalidationResult.validation;
-        // Update the validation payload with retry data
-        validationLLMPayloads[i] = {
-          optionId: option.id,
-          payload: revalidationResult.llmPayload,
-          retried: true
-        };
-
-        finalOptions[i].validation = {
-          warnings: revalidation.warnings || [],
-          commentary: revalidation.commentary || []
-        };
-
-        // Replace technical notes with user-facing summary if available
-        if (revalidation.userFacingSummary) {
-          finalOptions[i].summary.notes = revalidation.userFacingSummary;
-        }
-      }
-    }
-
-    // Log warnings and commentary
-    if (validation.warnings && validation.warnings.length > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`    Option ${option.id} has ${validation.warnings.length} warning(s)`);
-    }
-    if (validation.commentary && validation.commentary.length > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`    Option ${option.id} commentary: ${validation.commentary.length} goal(s) assessed`);
-    }
-  }
-
-  // Log results
-  const promptLog = {
-    timestamp: new Date().toISOString(),
-    approach: 'Three Deterministic Algorithms with LLM Constraint Extraction & Validation',
-    extractedConstraints,
-    option1_stats: finalOptions[0].summary,
-    option2_stats: finalOptions[1].summary,
-    option3_stats: finalOptions[2].summary,
-    request: requestData
-  };
-
-  await writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_prompt.json`), promptLog);
-
-  // Write anonymized LLM payloads for transparency
-  const anonymizationLog = {
-    timestamp: new Date().toISOString(),
-    description:
-      'This file shows exactly what data was sent to the LLM API. All names are pseudonymized with HMAC-SHA256 + random salt.',
-    salt,
-    nameMapping: {
-      note: 'Mapping between real names and pseudonyms (only stored locally, never sent to API)',
-      advisors: Array.from(realToPseudo.entries())
-        .filter(([name]) => requestData.advisors.some((a) => a.name === name))
-        .map(([real, pseudo]) => ({ real, pseudo })),
-      students: Array.from(realToPseudo.entries())
-        .filter(([name]) => requestData.students.some((s) => s.name === name))
-        .map(([real, pseudo]) => ({ real, pseudo }))
-    },
-    constraintExtraction: extractionLLMPayload,
-    validations: validationLLMPayloads
-  };
-
-  // Write output files
-  const outputWritePromises = finalOptions.map((option) =>
-    writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_output${option.id}.json`), option)
-  );
-  outputWritePromises.push(saveOptionCSVs(lotterySlug, finalOptions, 'studio'));
-  outputWritePromises.push(
-    writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_llm-payloads.json`), anonymizationLog)
-  );
-  await Promise.all(outputWritePromises);
-
-  // eslint-disable-next-line no-console
-  console.log('  ✓ Complete!\n');
-
-  const responsePayload = {
-    lotterySlug,
-    mode: 'studio',
+    mode,
     options: finalOptions.map((option) => ({
       id: option.id,
       summary: option.summary,
@@ -740,12 +342,8 @@ app.post('/api/run', async (req, res) => {
 
     await ensureOutputsDir();
 
-    // Route to appropriate pipeline based on mode
-    if (requestData.mode === 'studio') {
-      return handleStudioLottery(requestData, lotterySlug, res);
-    } else {
-      return handleAdvisorLottery(requestData, lotterySlug, res);
-    }
+    const mode = requestData.mode === 'studio' ? 'studio' : 'advisor';
+    return handleLottery(requestData, lotterySlug, res, mode);
 
   } catch (error) {
     // eslint-disable-next-line no-console

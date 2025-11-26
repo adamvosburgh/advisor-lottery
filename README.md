@@ -1,41 +1,27 @@
 # GSAPP Lottery
 
-Faculty–student assignment tool using three deterministic matching algorithms with LLM-powered constraint extraction and validation.
+Faculty–student assignment tool with two mode-aware pipelines:
+- **CDP Advisor Lottery** – assigns students to advisors.
+- **Architecture Studio Lottery** – assigns students to studios.
 
-**Live Site:** https://lab.adamvosburgh.com
+Both modes use three deterministic algorithms plus an LLM layer for constraint extraction, validation, and user-facing summaries. Names are anonymized before any LLM call (HMAC-SHA256 + random salt). Dual LLM providers are supported (local Ollama or Hugging Face API).
 
-**Architecture:**
-1. Three deterministic algorithms generate optimal assignments
-2. Names are anonymized before LLM calls (HMAC-SHA256 + random salt)
-3. LLM extracts constraints from natural language and validates outputs
-4. Results are de-anonymized and returned with real names
-5. Dual LLM support: local Ollama (free, slow) or HuggingFace API (paid, fast)
-
-## Quick Start
-
-### Development
+## Quick Start (Development)
 ```bash
 npm install
 cd web && npm install && cd ..
 
-# Create .env in root directory
-npm run dev
+# Create .env in project root (see below)
+npm run dev           # runs backend + frontend together
 ```
+Open http://localhost:4748.
 
-Navigate to `http://localhost:4748`
-
-### Production
-See `DEPLOYMENT.md` for full deployment instructions with PM2 and Cloudflare Tunnel.
-
-## Environment
-
-Create `.env` at project root:
-
+## Environment (.env at project root)
 ```bash
-# LLM Provider (ollama or huggingface)
-LLM_PROVIDER=ollama
+# LLM Provider
+LLM_PROVIDER=ollama          # or huggingface
 
-# HuggingFace (only if LLM_PROVIDER=huggingface)
+# Hugging Face (only if LLM_PROVIDER=huggingface)
 HF_API_KEY=hf_xxx
 
 # Ollama (only if LLM_PROVIDER=ollama)
@@ -43,69 +29,48 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.1:8b
 
 # Server
-APP_SHARED_PASSWORD=       # optional - leave blank to disable password protection
-PORT=4747                  # backend port
+APP_SHARED_PASSWORD=         # optional; leave blank to disable
+PORT=4747
 ```
 
-## How It Works
+## Using the App
+1) Choose **Lottery Type** in the UI: *Advisor* (CDP) or *Studio* (Architecture). The backend adjusts prompts, validation language, and file labels based on this mode.  
+2) Enter a lottery name (used for output filenames).  
+3) Upload Advisors/Studios CSV: `name,capacity,notes`.  
+4) Upload Students CSV (either rank columns or rank_* headers):
+   ```csv
+   # Style A: rank columns
+   student,rank_1,rank_2,rank_3
+   Casey,Alice,Bob,Carol
 
-### 1. Upload CSVs
+   # Style B: advisor/studio columns
+   student,Alice,Bob,Carol
+   Casey,1,2,3
+   ```
+   Empty cells are ignored; unranked advisors/studios default to a low preference.
+5) Run. You get three options:
+   - **Water-Filling (minimax)**
+   - **Deferred Acceptance (first-choice heavy)**
+   - **Minimum Regret (balanced)**
+   Each option is validated by the LLM, annotated with warnings/commentary, and downloadable as CSV.
 
-**Faculty:**
-```csv
-name,capacity,notes
-Alice,2,Must have either 0 or 2 students
-Bob,3,Would prefer 1 student
-Carol,1,
-```
+## Outputs
+- `outputs/<slug>_output[1-3].csv` – assignments (real names).  
+- `outputs/<slug>_output[1-3].json` – full summaries and validation per option.  
+- `outputs/<slug>_prompt.json` – request data + extracted constraints.  
+- `outputs/<slug>_llm-payloads.json` – anonymized payloads sent to the LLM (pseudonyms only).  
 
-**Students:**
-```csv
-student,rank_1,rank_2,rank_3
-Jay,Alice,Bob,Carol
-Sara,Bob,Alice,Carol
-```
-
-### 2. Algorithms Generate Assignments
-
-Three deterministic algorithms run in parallel:
-- **Water-Filling**: Minimizes worst-case placement (minimax)
-- **Deferred Acceptance**: Maximizes first-choice assignments (greedy)
-- **Minimum Regret**: Balances overall satisfaction (constraint satisfaction heuristics)
-
-### 3. LLM Validation
-
-**Dual LLM Support:**
-- **Ollama (Local)**: Llama-3.1-8B running locally - free, slower (~5 min)
-- **HuggingFace (API)**: Llama-3.1-70B via API - paid, faster (~10 sec)
-- Toggle between providers in the UI or via `.env`
-
-**LLM Tasks:**
-- Extracts constraints from natural language (e.g., "must have 0 or 2 students" → conditional capacity constraint)
-- Categorizes into hard constraints (violations block solution), soft constraints (generate warnings), and optimization goals (guide user choice)
-- Validates all three algorithm outputs
-- Generates plain-language summaries tailored to user's specific constraints
-
-### 4. Privacy Layer
-
-All names are anonymized before LLM calls:
-- Uses HMAC-SHA256 with random 256-bit salt (unique per run)
-- Salt never sent to API 
-- Results de-anonymized before returning to user
-
-### 5. Output Files
-
-Each run writes to `outputs/`:
-- `<slug>_output1.csv`, `_output2.csv`, `_output3.csv` - Downloadable results
-- `<slug>_prompt.json` - Request data and extracted constraints (real names)
-- `<slug>_llm-payloads.json` - Anonymized data sent to API (for transparency)
+## Scripts
+- `npm run dev` – run backend + frontend together.  
+- `npm run server` – backend only.  
+- `npm run web:dev` – frontend only.  
+- `npm run web` – build and preview frontend.  
 
 ## Project Structure
-
 ```
 advisor-lottery/
 ├─ server/
-│  ├─ server.js              # Express API with algorithm orchestration
+│  ├─ server.js              # Express API; mode-aware pipeline
 │  └─ utils/
 │     ├─ algorithms.js       # Water-Filling, Deferred Acceptance, Minimum Regret
 │     ├─ hf.js               # LLM constraint extraction & validation
@@ -115,40 +80,12 @@ advisor-lottery/
 │     └─ fileio.js           # File I/O utilities
 ├─ web/                      # Vite + React SPA
 │  └─ src/
-│     ├─ App.jsx             # Single-screen UI
+│     ├─ App.jsx             # Single-screen UI with mode toggle
 │     ├─ components/         # Dropzone, Field, OutputCard
 │     └─ styles.css
 ├─ outputs/                  # Generated files (gitignored)
-└─ examples/                 # Test data (gitignored)
+└─ examples/                 # Sample data (gitignored)
 ```
-
-## Technical Details
-
-- **LLM**: Llama-3.1-70B-Instruct via Hugging Face Router API
-- **Constraint Extraction**: System prompt categorizes natural language into hard/soft/optimization constraints
-- **Validation**: LLM checks algorithm outputs against extracted constraints, triggers retries if violations detected
-- **Anonymization**: HMAC-SHA256 with random salt prevents rainbow table attacks
-- **Fallback**: LLM failures fall back to regex-based validation
-- **Rate Limit**: 20 requests/minute
-- **Auth**: Optional shared password via `APP_SHARED_PASSWORD`
-
-## CSV Format Notes
-
-**Students CSV** accepts two styles:
-```csv
-# Style 1: rank_* headers
-student,rank_1,rank_2,rank_3
-Casey,Alice,Bob,Carol
-
-# Style 2: faculty-name headers
-student,Alice,Bob,Carol
-Casey,1,2,3
-```
-
-Mixing styles is fine. Empty cells ignored, unranked faculty default to rank 999.
 
 ## Deployment
-
-- Keep Express server private (never expose `HF_API_KEY`)
-- Reverse proxy `/download/*` if behind nginx
-- Periodically clean `outputs/` directory
+See `DEPLOYMENT.md` for PM2 + Cloudflare Tunnel setup. Keep the backend private; never expose `HF_API_KEY`.
