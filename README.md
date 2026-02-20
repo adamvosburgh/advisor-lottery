@@ -73,10 +73,12 @@ advisor-lottery/
 │  ├─ server.js              # Express API; mode-aware pipeline
 │  └─ utils/
 │     ├─ algorithms.js       # Water-Filling, Deferred Acceptance, Minimum Regret
-│     ├─ hf.js               # LLM constraint extraction & validation
+│     ├─ hf.js               # Hugging Face LLM adapter
+│     ├─ llm.js              # LLM constraint extraction & validation
 │     ├─ anonymize.js        # HMAC-SHA256 pseudonymization
 │     ├─ validate.js         # Zod schema validation
 │     ├─ csv.js              # CSV output generation
+│     ├─ verify-output.js    # Post-run assignment verification
 │     └─ fileio.js           # File I/O utilities
 ├─ web/                      # Vite + React SPA
 │  └─ src/
