@@ -219,84 +219,71 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
     if (!madeChange) break;
   }
 
-  // Phase 3: Ensure minimum capacity constraints
-  iteration = 0;
-  while (iteration < MAX_ITERATIONS) {
-    let madeChange = false;
-    iteration += 1;
+  // Phase 3: Enforce minimum capacity constraints
+  // Process studios with the largest shortfall first so no studio is starved
+  // by map-insertion order. Within each studio, always pull from the most
+  // overfull donor so no donor is prematurely drained to its minimum.
+  {
+    const getUnderenrolled = () => {
+      const result = [];
+      advisorMap.forEach((advisor, key) => {
+        const shortfall = advisor.minCapacity - advisor.assigned.length;
+        if (shortfall > 0) result.push({ key, advisor, shortfall });
+      });
+      return result.sort((a, b) => b.shortfall - a.shortfall);
+    };
 
-    // Find advisors below minimum capacity
-    for (const [underassignedKey, underassignedAdvisor] of advisorMap.entries()) {
-      const shortfall = underassignedAdvisor.minCapacity - underassignedAdvisor.assigned.length;
+    for (const { key: underKey, advisor: underAdvisor } of getUnderenrolled()) {
+      while (underAdvisor.assigned.length < underAdvisor.minCapacity) {
+        // Recompute donor list each pass so slack values are always current
+        const donors = [];
+        advisorMap.forEach((advisor, key) => {
+          const slack = advisor.assigned.length - advisor.minCapacity;
+          if (key !== underKey && slack > 0) donors.push({ key, advisor, slack });
+        });
+        donors.sort((a, b) => b.slack - a.slack);
 
-      if (shortfall > 0) {
-        // Need to move students TO this underassigned advisor
-        // Find donor advisors (those above their minimum or at max capacity)
-        let bestDonorStudent = null;
-        let bestDonorAdvisorKey = null;
-        let bestRankInUnderassigned = Infinity;
+        if (donors.length === 0) break; // Cannot fill further
 
-        for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
-          if (donorKey === underassignedKey) continue;
+        // Prefer a student who ranked the underenrolled studio
+        let bestStudent = null;
+        let bestStudentDonorKey = null;
+        let bestRank = Infinity;
 
-          // Donor must be above their minimum (or have no minimum)
-          if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
-
-          // Look through students assigned to donor
-          for (const studentName of donorAdvisor.assigned) {
-            const studentKey = normalizeKey(studentName);
-            const student = studentPreferences.get(studentKey);
+        for (const { key: dKey, advisor: dAdvisor } of donors) {
+          for (const studentName of dAdvisor.assigned) {
+            const student = studentPreferences.get(normalizeKey(studentName));
             if (!student) continue;
-
-            // Check if student ranked underassigned advisor
-            const rankInUnderassigned = student.preferences.indexOf(underassignedKey);
-            if (rankInUnderassigned >= 0 && rankInUnderassigned + 1 < bestRankInUnderassigned) {
-              bestRankInUnderassigned = rankInUnderassigned + 1;
-              bestDonorStudent = student;
-              bestDonorAdvisorKey = donorKey;
+            const rank = student.preferences.indexOf(underKey);
+            if (rank >= 0 && rank + 1 < bestRank) {
+              bestRank = rank + 1;
+              bestStudent = student;
+              bestStudentDonorKey = dKey;
             }
           }
         }
 
-        // If no student prefers underassigned advisor, take anyone from a donor above minimum
-        if (!bestDonorStudent) {
-          for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
-            if (donorKey === underassignedKey) continue;
-            if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
-            if (donorAdvisor.assigned.length > 0) {
-              const studentName = donorAdvisor.assigned[0];
-              const studentKey = normalizeKey(studentName);
-              bestDonorStudent = studentPreferences.get(studentKey);
-              bestDonorAdvisorKey = donorKey;
-              bestRankInUnderassigned = 999; // Unranked/forced assignment
-              break;
-            }
-          }
+        // Fallback: take the first student from the highest-slack donor
+        if (!bestStudent) {
+          const { key: dKey, advisor: dAdvisor } = donors[0];
+          const studentName = dAdvisor.assigned[0];
+          bestStudent = studentPreferences.get(normalizeKey(studentName));
+          bestStudentDonorKey = dKey;
+          bestRank = 999;
         }
 
-        // Move student from donor to underassigned
-        if (bestDonorStudent && bestDonorAdvisorKey) {
-          const donorAdvisor = advisorMap.get(bestDonorAdvisorKey);
+        if (!bestStudent) break; // Give up on this studio
 
-          // Remove from donor
-          donorAdvisor.assigned = donorAdvisor.assigned.filter(
-            (name) => normalizeKey(name) !== normalizeKey(bestDonorStudent.name)
-          );
-
-          // Add to underassigned
-          underassignedAdvisor.assigned.push(bestDonorStudent.name);
-
-          // Update student
-          bestDonorStudent.currentAdvisor = underassignedKey;
-          bestDonorStudent.currentRank = bestRankInUnderassigned;
-
-          madeChange = true;
-          break; // Re-evaluate all advisors
-        }
+        // Move student from donor to underenrolled studio
+        const donorAdvisor = advisorMap.get(bestStudentDonorKey);
+        donorAdvisor.assigned = donorAdvisor.assigned.filter(
+          (n) => normalizeKey(n) !== normalizeKey(bestStudent.name)
+        );
+        underAdvisor.assigned.push(bestStudent.name);
+        bestStudent.currentAdvisor = underKey;
+        bestStudent.currentRank = bestRank;
       }
     }
-
-    if (!madeChange) break;
   }
 
   // Build final assignments
@@ -456,68 +443,64 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
     }
   }
 
-  // Phase 3: Ensure minimum capacity constraints
-  iteration = 0;
-  while (iteration < MAX_ITERATIONS) {
-    let madeChange = false;
-    iteration += 1;
+  // Phase 3: Enforce minimum capacity constraints
+  // Same greedy-fill approach as Water-Filling: largest shortfall first,
+  // pull from highest-slack donors, recompute each pass.
+  {
+    const getUnderenrolledDA = () => {
+      const result = [];
+      advisorMap.forEach((advisor, key) => {
+        const shortfall = advisor.minCapacity - advisor.tentativeMatches.length;
+        if (shortfall > 0) result.push({ key, advisor, shortfall });
+      });
+      return result.sort((a, b) => b.shortfall - a.shortfall);
+    };
 
-    for (const [underassignedKey, underassignedAdvisor] of advisorMap.entries()) {
-      const shortfall = underassignedAdvisor.minCapacity - underassignedAdvisor.tentativeMatches.length;
+    for (const { key: underKey, advisor: underAdvisor } of getUnderenrolledDA()) {
+      while (underAdvisor.tentativeMatches.length < underAdvisor.minCapacity) {
+        const donors = [];
+        advisorMap.forEach((advisor, key) => {
+          const slack = advisor.tentativeMatches.length - advisor.minCapacity;
+          if (key !== underKey && slack > 0) donors.push({ key, advisor, slack });
+        });
+        donors.sort((a, b) => b.slack - a.slack);
 
-      if (shortfall > 0) {
-        // Find a donor advisor above their minimum
-        let bestDonorMatch = null;
-        let bestDonorAdvisorKey = null;
-        let bestRankInUnderassigned = Infinity;
+        if (donors.length === 0) break;
 
-        for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
-          if (donorKey === underassignedKey) continue;
-          if (donorAdvisor.tentativeMatches.length <= donorAdvisor.minCapacity) continue;
+        let bestMatch = null;
+        let bestMatchDonorKey = null;
+        let bestRank = Infinity;
 
-          for (const match of donorAdvisor.tentativeMatches) {
+        for (const { key: dKey, advisor: dAdvisor } of donors) {
+          for (const match of dAdvisor.tentativeMatches) {
             const student = studentQueue.find((s) => s.name === match.studentName);
             if (!student) continue;
-
-            const rankInUnderassigned = student.preferences.indexOf(underassignedKey);
-            if (rankInUnderassigned >= 0 && rankInUnderassigned + 1 < bestRankInUnderassigned) {
-              bestRankInUnderassigned = rankInUnderassigned + 1;
-              bestDonorMatch = match;
-              bestDonorAdvisorKey = donorKey;
+            const rank = student.preferences.indexOf(underKey);
+            if (rank >= 0 && rank + 1 < bestRank) {
+              bestRank = rank + 1;
+              bestMatch = match;
+              bestMatchDonorKey = dKey;
             }
           }
         }
 
-        if (!bestDonorMatch) {
-          // Take anyone from a donor above minimum
-          for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
-            if (donorKey === underassignedKey) continue;
-            if (donorAdvisor.tentativeMatches.length <= donorAdvisor.minCapacity) continue;
-            if (donorAdvisor.tentativeMatches.length > 0) {
-              bestDonorMatch = donorAdvisor.tentativeMatches[0];
-              bestDonorAdvisorKey = donorKey;
-              bestRankInUnderassigned = 999;
-              break;
-            }
-          }
+        // Fallback: take first match from highest-slack donor
+        if (!bestMatch) {
+          const { key: dKey, advisor: dAdvisor } = donors[0];
+          bestMatch = dAdvisor.tentativeMatches[0];
+          bestMatchDonorKey = dKey;
+          bestRank = 999;
         }
 
-        if (bestDonorMatch && bestDonorAdvisorKey) {
-          const donorAdvisor = advisorMap.get(bestDonorAdvisorKey);
-          donorAdvisor.tentativeMatches = donorAdvisor.tentativeMatches.filter(
-            (m) => m.studentName !== bestDonorMatch.studentName
-          );
-          underassignedAdvisor.tentativeMatches.push({
-            studentName: bestDonorMatch.studentName,
-            rank: bestRankInUnderassigned
-          });
-          madeChange = true;
-          break;
-        }
+        if (!bestMatch) break;
+
+        const donorAdvisor = advisorMap.get(bestMatchDonorKey);
+        donorAdvisor.tentativeMatches = donorAdvisor.tentativeMatches.filter(
+          (m) => m.studentName !== bestMatch.studentName
+        );
+        underAdvisor.tentativeMatches.push({ studentName: bestMatch.studentName, rank: bestRank });
       }
     }
-
-    if (!madeChange) break;
   }
 
   // Build final assignments
@@ -836,71 +819,64 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
     if (!improvedRegret) break;
   }
 
-  // Phase 3: Ensure minimum capacity constraints
-  let minCapacityIterations = 0;
-  while (minCapacityIterations < MAX_ITERATIONS) {
-    let madeChange = false;
-    minCapacityIterations += 1;
+  // Phase 3: Enforce minimum capacity constraints
+  // Same greedy-fill approach as the other algorithms.
+  {
+    const getUnderenrolledMR = () => {
+      const result = [];
+      advisorMap.forEach((advisor, key) => {
+        const shortfall = advisor.minCapacity - advisor.assigned.length;
+        if (shortfall > 0) result.push({ key, advisor, shortfall });
+      });
+      return result.sort((a, b) => b.shortfall - a.shortfall);
+    };
 
-    for (const [underassignedKey, underassignedAdvisor] of advisorMap.entries()) {
-      const shortfall = underassignedAdvisor.minCapacity - underassignedAdvisor.assigned.length;
+    for (const { key: underKey, advisor: underAdvisor } of getUnderenrolledMR()) {
+      while (underAdvisor.assigned.length < underAdvisor.minCapacity) {
+        const donors = [];
+        advisorMap.forEach((advisor, key) => {
+          const slack = advisor.assigned.length - advisor.minCapacity;
+          if (key !== underKey && slack > 0) donors.push({ key, advisor, slack });
+        });
+        donors.sort((a, b) => b.slack - a.slack);
 
-      if (shortfall > 0) {
-        // Find a donor advisor above their minimum
-        let bestDonorStudent = null;
-        let bestRankInUnderassigned = Infinity;
+        if (donors.length === 0) break;
 
-        for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
-          if (donorKey === underassignedKey) continue;
-          if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
+        let bestStudent = null;
+        let bestStudentDonorKey = null;
+        let bestRank = Infinity;
 
-          for (const studentName of donorAdvisor.assigned) {
+        for (const { key: dKey, advisor: dAdvisor } of donors) {
+          for (const studentName of dAdvisor.assigned) {
             const student = studentList.find((s) => s.name === studentName);
             if (!student) continue;
-
-            const rankInUnderassigned = student.preferences.indexOf(underassignedKey);
-            if (rankInUnderassigned >= 0 && rankInUnderassigned + 1 < bestRankInUnderassigned) {
-              bestRankInUnderassigned = rankInUnderassigned + 1;
-              bestDonorStudent = student;
+            const rank = student.preferences.indexOf(underKey);
+            if (rank >= 0 && rank + 1 < bestRank) {
+              bestRank = rank + 1;
+              bestStudent = student;
+              bestStudentDonorKey = dKey;
             }
           }
         }
 
-        if (!bestDonorStudent) {
-          // Take anyone from a donor above minimum
-          for (const [donorKey, donorAdvisor] of advisorMap.entries()) {
-            if (donorKey === underassignedKey) continue;
-            if (donorAdvisor.assigned.length <= donorAdvisor.minCapacity) continue;
-            if (donorAdvisor.assigned.length > 0) {
-              const studentName = donorAdvisor.assigned[0];
-              bestDonorStudent = studentList.find((s) => s.name === studentName);
-              bestRankInUnderassigned = 999;
-              break;
-            }
-          }
+        // Fallback: take first student from highest-slack donor
+        if (!bestStudent) {
+          const { key: dKey, advisor: dAdvisor } = donors[0];
+          const studentName = dAdvisor.assigned[0];
+          bestStudent = studentList.find((s) => s.name === studentName);
+          bestStudentDonorKey = dKey;
+          bestRank = 999;
         }
 
-        if (bestDonorStudent) {
-          const oldAdvisorKey = bestDonorStudent.assignedAdvisor;
-          const oldAdvisor = advisorMap.get(oldAdvisorKey);
+        if (!bestStudent) break;
 
-          // Remove from old advisor
-          oldAdvisor.assigned = oldAdvisor.assigned.filter((n) => n !== bestDonorStudent.name);
-
-          // Add to underassigned
-          underassignedAdvisor.assigned.push(bestDonorStudent.name);
-
-          // Update student
-          bestDonorStudent.assignedAdvisor = underassignedKey;
-          bestDonorStudent.assignedRank = bestRankInUnderassigned;
-
-          madeChange = true;
-          break;
-        }
+        const donorAdvisor = advisorMap.get(bestStudentDonorKey);
+        donorAdvisor.assigned = donorAdvisor.assigned.filter((n) => n !== bestStudent.name);
+        underAdvisor.assigned.push(bestStudent.name);
+        bestStudent.assignedAdvisor = underKey;
+        bestStudent.assignedRank = bestRank;
       }
     }
-
-    if (!madeChange) break;
   }
 
   // Build final assignments

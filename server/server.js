@@ -146,6 +146,14 @@ async function handleLottery(requestData, lotterySlug, mode) {
       option = runner(requestData.students, adjustedAdvisors, requestData.parameters, mode);
     }
 
+    const minViolations = option.summary?.minimumCapacityViolations;
+    if (minViolations && minViolations.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `    WARNING: minimum capacity still violated after Phase 3 for: ${minViolations.map((v) => `${v.name} (${v.current}/${v.minimum})`).join(', ')}`
+      );
+    }
+
     return option;
   };
 
