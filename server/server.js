@@ -60,7 +60,7 @@ app.set('trust proxy', 1);
 
 app.use(
   cors({
-    origin: 'https://lab.adamvosburgh.com'
+    origin: 'https://lottery.adamvosburgh.com'
   })
 );
 app.use(express.json({ limit: '2mb' }));

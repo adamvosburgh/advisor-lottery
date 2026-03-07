@@ -20,7 +20,7 @@ export default defineConfig({
     port: 4748,
     host: '0.0.0.0',
     allowedHosts: [
-      'lab.adamvosburgh.com',
+      'lottery.adamvosburgh.com',
       'localhost',
       '127.0.0.1'
     ]
