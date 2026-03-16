@@ -4,7 +4,7 @@ import Field from './components/Field.jsx';
 import OutputCard from './components/OutputCard.jsx';
 
 function App() {
-  const [mode, setMode] = useState('advisor'); // 'advisor' or 'studio'
+  const [mode, setMode] = useState('studio'); // 'advisor' or 'studio'
   const [advisors, setAdvisors] = useState([]);
   const [students, setStudents] = useState([]);
   const [lotteryName, setLotteryName] = useState('');
@@ -313,7 +313,6 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <h1>GSAPP Lottery</h1>
-        <p>Generate optimal faculty-student assignments using deterministic algorithms and an LLM for constraint validation.</p>
       </header>
 
       {/* Mode Selector */}
@@ -321,19 +320,19 @@ function App() {
         <div className="mode-buttons">
           <button
             type="button"
-            className={`mode-button ${mode === 'advisor' ? 'mode-button--active' : ''}`}
-            onClick={() => setMode('advisor')}
-            disabled={loading}
-          >
-            CDP Advisor Lottery
-          </button>
-          <button
-            type="button"
             className={`mode-button ${mode === 'studio' ? 'mode-button--active' : ''}`}
             onClick={() => setMode('studio')}
             disabled={loading}
           >
             Architecture Studio Lottery
+          </button>
+          <button
+            type="button"
+            className={`mode-button ${mode === 'advisor' ? 'mode-button--active' : ''}`}
+            onClick={() => setMode('advisor')}
+            disabled={loading}
+          >
+            CDP Advisor Lottery
           </button>
         </div>
       </div>
@@ -367,7 +366,7 @@ function App() {
               mode="students"
               lotteryMode={mode}
               onParsed={handleStudentsParsed}
-              templatePath="/templates/students-template.csv"
+              templatePath="/templates/students-studio-template.csv"
             />
             <div className="studio-config-card">
               <div className="studio-config-label">Studio Configuration</div>
@@ -457,6 +456,19 @@ function App() {
           <div className="results-meta">
             <span className="results-slug">Slug: {results.lotterySlug}</span>
             <span>Generated {results.options.length} optimized assignment options.</span>
+            {results.xlsxPath && (
+              <a
+                href={results.xlsxPath}
+                download
+                className="download-button download-button--xlsx"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M6 20H18M12 4V16M12 16L8 12M12 16L16 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Download XLSX
+              </a>
+            )}
           </div>
           <div className="output-grid">
             {results.options.map((option) => (

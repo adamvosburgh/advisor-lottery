@@ -113,6 +113,16 @@ function normalizeStudentRows(results, lotteryMode = 'advisor') {
     throw new Error(`Students CSV needs at least one ${terminology} preference column. See template for correct format.`);
   }
 
+  // For studio mode, enforce STUDIO X header format
+  if (lotteryMode === 'studio') {
+    const invalidHeaders = remainingHeaders.filter((header) => !/^STUDIO [A-Z]+$/i.test(header.trim()));
+    if (invalidHeaders.length) {
+      throw new Error(
+        `Studio columns must use the "STUDIO X" format (e.g., STUDIO A, STUDIO B). Invalid headers: ${invalidHeaders.join(', ')}`
+      );
+    }
+  }
+
   const allGeneric = remainingHeaders.every((header) => isGenericHeader(header));
 
   const students = [];

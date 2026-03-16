@@ -28,6 +28,7 @@ const { validateRequestPayload, validateAndAnnotate } = require('./utils/validat
 const { extractConstraints, validateAssignments } = require('./utils/hf');
 const { OUTPUT_DIR, ensureOutputsDir, writeJSON } = require('./utils/fileio');
 const { saveOptionCSVs } = require('./utils/csv');
+const { saveXLSX } = require('./utils/xlsx');
 const { createNameMapping } = require('./utils/anonymize');
 const {
   runWaterFillingAlgorithm,
@@ -321,6 +322,9 @@ async function handleLottery(requestData, lotterySlug, mode) {
   outputWritePromises.push(
     writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_llm-payloads.json`), anonymizationLog)
   );
+  if (mode === 'studio') {
+    outputWritePromises.push(saveXLSX(lotterySlug, requestData.students, finalOptions));
+  }
   await Promise.all(outputWritePromises);
 
   // eslint-disable-next-line no-console
@@ -329,6 +333,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
   return {
     lotterySlug,
     mode,
+    ...(mode === 'studio' ? { xlsxPath: `/download/${lotterySlug}_output.xlsx` } : {}),
     options: finalOptions.map((option) => ({
       id: option.id,
       summary: option.summary,

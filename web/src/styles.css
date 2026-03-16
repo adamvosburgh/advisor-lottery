@@ -598,58 +598,59 @@ body::before {
 
 /* Studio Configuration Card */
 .studio-config-card {
-  background: white;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 1.5rem;
+  background: var(--form-bg);
+  border-radius: var(--radius-card);
+  box-shadow: var(--card-shadow);
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 16px;
 }
 
 .studio-config-label {
-  font-weight: 600;
-  font-size: 0.875rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #333;
+  color: var(--title-color);
 }
 
 .studio-config-fields {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 12px;
 }
 
 .studio-config-field {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 8px;
 }
 
 .studio-config-field label {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #555;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--title-color);
 }
 
 .studio-config-field input[type="number"] {
-  padding: 0.75rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-family: 'Roboto Mono', monospace;
-  font-size: 1rem;
-  background: #fafafa;
+  padding: 18px 26px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: var(--input-bg);
+  font-family: inherit;
+  font-size: 0.8rem;
+  color: var(--text-color);
+  box-shadow: var(--input-shadow);
 }
 
 .studio-config-field input[type="number"]:focus {
-  outline: none;
-  border-color: #007bff;
-  background: white;
+  outline: 2px solid rgba(62, 108, 179, 0.25);
+  background: rgba(255, 255, 255, 0.98);
 }
 
 .studio-config-field input[type="number"]:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
