@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback } from 'react';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 
 const GENERIC_HEADERS = ['rank', 'preference', 'choice'];
 
@@ -35,7 +36,7 @@ function normalizeAdvisorRows(results) {
   const notesField = fields.find((field) => normalizeHeader(field) === 'notes');
 
   if (!nameField || !capacityField) {
-    throw new Error('Advisors CSV must have "Name" and "Capacity" columns. Optional: "Notes". See template for correct format.');
+    throw new Error('Advisors file must have "Name" and "Capacity" columns. Optional: "Notes". See template for correct format.');
   }
 
   const advisors = [];
@@ -61,7 +62,7 @@ function normalizeAdvisorRows(results) {
   }
 
   if (!advisors.length) {
-    throw new Error('No advisor rows detected. Please check your CSV format and see template.');
+    throw new Error('No advisor rows detected. Please check your file format and see template.');
   }
 
   return advisors;
@@ -71,7 +72,7 @@ function normalizeStudentRows(results, lotteryMode = 'advisor') {
   const { data, meta } = results;
   const fields = (meta.fields || []).map((field) => field.trim());
   if (!fields.length) {
-    throw new Error('Students CSV is missing headers.');
+    throw new Error('Students file is missing headers.');
   }
 
   const studentHeader = fields[0];
@@ -95,7 +96,7 @@ function normalizeStudentRows(results, lotteryMode = 'advisor') {
   // For advisor mode, require email as second column
   if (lotteryMode === 'advisor') {
     if (fields.length < 2) {
-      throw new Error('Students CSV needs at least "Name" and "Email" columns, plus preference columns. See template for correct format.');
+      throw new Error('Students file needs at least "Name" and "Email" columns, plus preference columns. See template for correct format.');
     }
 
     const secondHeader = fields[1];
@@ -110,7 +111,7 @@ function normalizeStudentRows(results, lotteryMode = 'advisor') {
   // Get preference columns (skip first column and email if advisor mode)
   const remainingHeaders = fields.slice(preferenceStartIndex);
   if (!remainingHeaders.length) {
-    throw new Error(`Students CSV needs at least one ${terminology} preference column. See template for correct format.`);
+    throw new Error(`Students file needs at least one ${terminology} preference column. See template for correct format.`);
   }
 
   // For studio mode, enforce STUDIO X header format
@@ -183,7 +184,7 @@ function normalizeStudentRows(results, lotteryMode = 'advisor') {
   }
 
   if (!students.length) {
-    throw new Error('No student rows detected. Please check your CSV format and see template.');
+    throw new Error('No student rows detected. Please check your file format and see template.');
   }
 
   return students;
@@ -201,32 +202,72 @@ function Dropzone({ label, mode, lotteryMode, onParsed, templatePath }) {
         return;
       }
 
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: 'greedy',
-        transformHeader: (header) => header.trim(),
-        complete: (results) => {
+      const isXlsx = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+
+      if (isXlsx) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
           try {
-            if (results.errors && results.errors.length) {
-              throw new Error(results.errors[0].message);
-            }
-            const payload =
-              mode === 'advisors'
-                ? normalizeAdvisorRows(results)
-                : normalizeStudentRows(results, lotteryMode);
-            onParsed(payload);
-            setFileName(file.name);
-            setError('');
+            const workbook = XLSX.read(e.target.result, { type: 'array' });
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const csv = XLSX.utils.sheet_to_csv(sheet);
+            Papa.parse(csv, {
+              header: true,
+              skipEmptyLines: 'greedy',
+              transformHeader: (header) => header.trim(),
+              complete: (results) => {
+                try {
+                  const payload =
+                    mode === 'advisors'
+                      ? normalizeAdvisorRows(results)
+                      : normalizeStudentRows(results, lotteryMode);
+                  onParsed(payload);
+                  setFileName(file.name);
+                  setError('');
+                } catch (err) {
+                  setFileName('');
+                  setError(err.message || 'Failed to parse file.');
+                }
+              }
+            });
           } catch (err) {
             setFileName('');
-            setError(err.message || 'Failed to parse CSV.');
+            setError(err.message || 'Failed to read XLSX file.');
           }
-        },
-        error: (err) => {
+        };
+        reader.onerror = () => {
           setFileName('');
-          setError(err.message || 'Failed to read CSV file.');
-        }
-      });
+          setError('Failed to read file.');
+        };
+        reader.readAsArrayBuffer(file);
+      } else {
+        Papa.parse(file, {
+          header: true,
+          skipEmptyLines: 'greedy',
+          transformHeader: (header) => header.trim(),
+          complete: (results) => {
+            try {
+              if (results.errors && results.errors.length) {
+                throw new Error(results.errors[0].message);
+              }
+              const payload =
+                mode === 'advisors'
+                  ? normalizeAdvisorRows(results)
+                  : normalizeStudentRows(results, lotteryMode);
+              onParsed(payload);
+              setFileName(file.name);
+              setError('');
+            } catch (err) {
+              setFileName('');
+              setError(err.message || 'Failed to parse CSV.');
+            }
+          },
+          error: (err) => {
+            setFileName('');
+            setError(err.message || 'Failed to read CSV file.');
+          }
+        });
+      }
     },
     [mode, lotteryMode, onParsed]
   );
@@ -304,7 +345,7 @@ function Dropzone({ label, mode, lotteryMode, onParsed, templatePath }) {
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,text/csv"
+          accept=".csv,.xlsx,.xls,text/csv"
           className="dropzone-input"
           onChange={onInputChange}
         />
@@ -312,7 +353,7 @@ function Dropzone({ label, mode, lotteryMode, onParsed, templatePath }) {
           {fileName ? (
             <span>{fileName}</span>
           ) : (
-            <span>Drop CSV here or click to select</span>
+            <span>Drop CSV or XLSX here or click to select</span>
           )}
         </div>
       </div>

@@ -162,13 +162,13 @@ function App() {
     // Validation based on mode
     if (mode === 'advisor') {
       if (!advisors.length) {
-        setError('Please upload a faculty CSV.');
+        setError('Please upload a faculty CSV or XLSX.');
         return;
       }
     }
 
     if (!students.length) {
-      setError('Please upload a students CSV.');
+      setError('Please upload a students CSV or XLSX.');
       return;
     }
 
@@ -341,14 +341,14 @@ function App() {
       {mode === 'advisor' && (
         <div className="grid-row">
           <Dropzone
-            label="UPLOAD FACULTY (.CSV)"
+            label="UPLOAD FACULTY (.CSV / .XLSX)"
             mode="advisors"
             lotteryMode={mode}
             onParsed={handleAdvisorsParsed}
             templatePath="/templates/advisors-template.csv"
           />
           <Dropzone
-            label="UPLOAD STUDENT SELECTIONS (.CSV)"
+            label="UPLOAD STUDENT SELECTIONS (.CSV / .XLSX)"
             mode="students"
             lotteryMode={mode}
             onParsed={handleStudentsParsed}
@@ -362,7 +362,7 @@ function App() {
         <>
           <div className="grid-row">
             <Dropzone
-              label="UPLOAD STUDENT SELECTIONS (.CSV)"
+              label="UPLOAD STUDENT SELECTIONS (.CSV / .XLSX)"
               mode="students"
               lotteryMode={mode}
               onParsed={handleStudentsParsed}
