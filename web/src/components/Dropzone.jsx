@@ -108,8 +108,8 @@ function normalizeStudentRows(results, lotteryMode = 'advisor') {
     preferenceStartIndex = 2; // Skip name and email
   }
 
-  // Get preference columns (skip first column and email if advisor mode)
-  const remainingHeaders = fields.slice(preferenceStartIndex);
+  // Get preference columns (skip first column and email if advisor mode), filter out empty trailing columns from xlsx conversion
+  const remainingHeaders = fields.slice(preferenceStartIndex).filter((h) => h.trim() !== '');
   if (!remainingHeaders.length) {
     throw new Error(`Students file needs at least one ${terminology} preference column. See template for correct format.`);
   }
