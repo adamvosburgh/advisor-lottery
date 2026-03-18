@@ -9,7 +9,7 @@
  */
 
 // HuggingFace Configuration
-const HF_MODEL = 'meta-llama/Llama-3.1-70B-Instruct';
+const HF_MODEL = 'Qwen/Qwen2.5-72B-Instruct';
 const HF_API_URL = 'https://router.huggingface.co/v1/chat/completions';
 
 // Helper function to get environment variables (reads at runtime, not module load time)

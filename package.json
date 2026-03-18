@@ -11,6 +11,7 @@
     "web:preview": "cd web && npm run preview"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "exceljs": "^4.4.0",

@@ -274,7 +274,7 @@ function App() {
     }
     return {
       label: 'Fast',
-      description: 'Uses a midweight (llama 3.1:70B) LLM via an API call. Will take approx 10 seconds. Mid energy + $0.01 billed to Adam.'
+      description: 'Uses Qwen2.5-72B via HuggingFace API. Will take approx 10 seconds. Mid energy + $0.01 billed to Adam.'
     };
   }, [provider]);
 
@@ -455,25 +455,41 @@ function App() {
         <section className="results-section">
           <div className="results-meta">
             <span className="results-slug">Slug: {results.lotterySlug}</span>
-            <span>Generated {results.options.length} optimized assignment options.</span>
-            {results.xlsxPath && (
+          </div>
+
+          <div className="results-block">
+            <h2 className="results-block__heading">Download Outputs</h2>
+            <div className="results-downloads">
               <a
                 href={results.xlsxPath}
                 download
-                className="download-button download-button--xlsx"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
+                className="results-download-btn"
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M6 20H18M12 4V16M12 16L8 12M12 16L16 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                Download XLSX
+                Download XLSX (all outputs, color marks assignment)
               </a>
-            )}
+              <a
+                href={`/api/zip/${results.lotterySlug}`}
+                download
+                className="results-download-btn"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M6 20H18M12 4V16M12 16L8 12M12 16L16 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Download CSV (zip file with three outputs)
+              </a>
+            </div>
           </div>
-          <div className="output-grid">
-            {results.options.map((option) => (
-              <OutputCard key={option.id} option={option} mode={mode} />
-            ))}
+
+          <div className="results-block">
+            <h2 className="results-block__heading">Generated Option Descriptions</h2>
+            <div className="output-grid">
+              {results.options.map((option) => (
+                <OutputCard key={option.id} option={option} allOptions={results.options} mode={mode} />
+              ))}
+            </div>
           </div>
         </section>
       )}

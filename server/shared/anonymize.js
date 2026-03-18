@@ -16,7 +16,6 @@ const crypto = require('crypto');
  * @returns {string} Pseudonymized ID like "ADV_8f3a2bc1"
  */
 function generatePseudonym(name, prefix, salt) {
-  // Use HMAC-SHA256 with salt to make it impossible to reverse
   const hmac = crypto.createHmac('sha256', salt);
   hmac.update(name);
   const hash = hmac.digest('hex');
@@ -26,28 +25,19 @@ function generatePseudonym(name, prefix, salt) {
 
 /**
  * Create bidirectional mapping between real names and pseudonyms
- * Generates a random salt that makes it computationally infeasible to
- * reverse the pseudonyms, even with rainbow tables
- *
- * @param {Array} advisors - Array of advisor objects with name property
- * @param {Array} students - Array of student objects with name property
- * @returns {Object} { realToPseudo, pseudoToReal, salt }
  */
 function createNameMapping(advisors, students) {
-  // Generate a random salt unique to this lottery run
   const salt = crypto.randomBytes(32).toString('hex');
 
   const realToPseudo = new Map();
   const pseudoToReal = new Map();
 
-  // Map advisor names
   advisors.forEach((advisor) => {
     const pseudo = generatePseudonym(advisor.name, 'ADV', salt);
     realToPseudo.set(advisor.name, pseudo);
     pseudoToReal.set(pseudo, advisor.name);
   });
 
-  // Map student names
   students.forEach((student) => {
     const pseudo = generatePseudonym(student.name, 'STU', salt);
     realToPseudo.set(student.name, pseudo);
@@ -65,12 +55,10 @@ function anonymizeText(text, realToPseudo) {
 
   let anonymized = text;
 
-  // Sort names by length (longest first) to avoid partial replacements
   const names = Array.from(realToPseudo.keys()).sort((a, b) => b.length - a.length);
 
   names.forEach((realName) => {
     const pseudo = realToPseudo.get(realName);
-    // Use word boundaries to avoid partial matches
     const regex = new RegExp(`\\b${realName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
     anonymized = anonymized.replace(regex, pseudo);
   });
@@ -112,6 +100,7 @@ function anonymizeAssignments(assignments, realToPseudo) {
 
 /**
  * Anonymize constraint extraction results (for re-sending to LLM)
+ * Includes capacityOverrides introduced for per-entity capacity bug fix.
  */
 function anonymizeConstraints(constraints, realToPseudo) {
   if (!constraints) return constraints;
@@ -122,11 +111,11 @@ function anonymizeConstraints(constraints, realToPseudo) {
       forbiddenPairs: [],
       requiredPairs: []
     },
+    capacityOverrides: [],
     softConstraints: [],
     optimizationGoals: []
   };
 
-  // Anonymize hard constraints
   if (constraints.hardConstraints) {
     result.hardConstraints.conditionalCapacity = (
       constraints.hardConstraints.conditionalCapacity || []
@@ -155,7 +144,13 @@ function anonymizeConstraints(constraints, realToPseudo) {
     );
   }
 
-  // Anonymize soft constraints
+  // Anonymize per-entity capacity overrides
+  result.capacityOverrides = (constraints.capacityOverrides || []).map((c) => ({
+    ...c,
+    name: realToPseudo.get(c.name) || c.name,
+    rawText: anonymizeText(c.rawText, realToPseudo)
+  }));
+
   result.softConstraints = (constraints.softConstraints || []).map((c) => ({
     ...c,
     target: realToPseudo.get(c.target) || c.target,
@@ -163,7 +158,6 @@ function anonymizeConstraints(constraints, realToPseudo) {
     description: anonymizeText(c.description, realToPseudo)
   }));
 
-  // Anonymize optimization goals
   result.optimizationGoals = (constraints.optimizationGoals || []).map((c) => ({
     ...c,
     rawText: anonymizeText(c.rawText, realToPseudo),
@@ -185,11 +179,11 @@ function deanonymizeConstraints(constraints, pseudoToReal) {
       forbiddenPairs: [],
       requiredPairs: []
     },
+    capacityOverrides: [],
     softConstraints: [],
     optimizationGoals: []
   };
 
-  // De-anonymize hard constraints
   if (constraints.hardConstraints) {
     result.hardConstraints.conditionalCapacity = (
       constraints.hardConstraints.conditionalCapacity || []
@@ -218,7 +212,13 @@ function deanonymizeConstraints(constraints, pseudoToReal) {
     );
   }
 
-  // De-anonymize soft constraints
+  // De-anonymize per-entity capacity overrides
+  result.capacityOverrides = (constraints.capacityOverrides || []).map((c) => ({
+    ...c,
+    name: pseudoToReal.get(c.name) || c.name,
+    rawText: deanonymizeText(c.rawText, pseudoToReal)
+  }));
+
   result.softConstraints = (constraints.softConstraints || []).map((c) => ({
     ...c,
     target: pseudoToReal.get(c.target) || c.target,
@@ -226,7 +226,6 @@ function deanonymizeConstraints(constraints, pseudoToReal) {
     description: deanonymizeText(c.description, pseudoToReal)
   }));
 
-  // De-anonymize optimization goals
   result.optimizationGoals = (constraints.optimizationGoals || []).map((c) => ({
     ...c,
     rawText: deanonymizeText(c.rawText, pseudoToReal),
@@ -271,7 +270,6 @@ function deanonymizeText(text, pseudoToReal) {
 
   let deanonymized = text;
 
-  // Sort pseudonyms by length (longest first) to avoid partial replacements
   const pseudonyms = Array.from(pseudoToReal.keys()).sort((a, b) => b.length - a.length);
 
   pseudonyms.forEach((pseudo) => {

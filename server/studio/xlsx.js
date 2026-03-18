@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 const path = require('path');
-const { OUTPUT_DIR } = require('./fileio');
+const { OUTPUT_DIR } = require('../shared/fileio');
 
 // Color palette — one per studio column position (ARGB format for exceljs)
 const STUDIO_COLORS = [
@@ -26,13 +26,8 @@ const STUDIO_COLORS = [
 
 /**
  * Populate a worksheet with the ballot grid + assignment colors for one algorithm output.
- *
- * @param {ExcelJS.Worksheet} worksheet
- * @param {Array<{name: string, preferences: string[]}>} students
- * @param {Array<{student: string, advisor: string, rank: number}>} assignments
  */
 function buildSheet(worksheet, students, assignments) {
-  // Collect studios in canonical order (sorted alpha — preserves STUDIO A, B, C… ordering)
   const studioSet = new Set();
   for (const student of students) {
     for (const pref of student.preferences) {
@@ -41,13 +36,11 @@ function buildSheet(worksheet, students, assignments) {
   }
   const studios = Array.from(studioSet).sort();
 
-  // Map studio name → color from palette
   const studioColor = new Map();
   studios.forEach((studio, index) => {
     studioColor.set(studio, STUDIO_COLORS[index % STUDIO_COLORS.length]);
   });
 
-  // Map student name → assigned studio
   const assignedStudio = new Map();
   for (const a of assignments) {
     assignedStudio.set(a.student, a.advisor);
@@ -64,8 +57,6 @@ function buildSheet(worksheet, students, assignments) {
 
   // Student rows
   for (const student of students) {
-    // Reconstruct original numeric ranks from the ordered preferences list
-    // preferences[0] was ranked 1st, preferences[1] was ranked 2nd, etc.
     const rankOf = new Map();
     student.preferences.forEach((studio, index) => {
       rankOf.set(studio, index + 1);
@@ -74,7 +65,6 @@ function buildSheet(worksheet, students, assignments) {
     const rowValues = [student.name, ...studios.map((s) => rankOf.get(s) ?? '')];
     const row = worksheet.addRow(rowValues);
 
-    // Color only the cell in the assigned studio column
     const assigned = assignedStudio.get(student.name);
     if (assigned) {
       const col = studios.indexOf(assigned);
@@ -91,14 +81,9 @@ function buildSheet(worksheet, students, assignments) {
 
 /**
  * Generate a single xlsx file with one sheet per algorithm output.
- * Only called for studio-mode runs.
- *
- * @param {string} lotterySlug
- * @param {Array<{name: string, preferences: string[]}>} students
- * @param {Array<{id: number, assignments: Array}>} finalOptions
- * @returns {Promise<string>} absolute path to the written file
+ * Called for studio-mode runs.
  */
-async function saveXLSX(lotterySlug, students, finalOptions) {
+async function saveStudioXLSX(lotterySlug, students, finalOptions) {
   const workbook = new ExcelJS.Workbook();
 
   for (const option of finalOptions) {
@@ -111,4 +96,4 @@ async function saveXLSX(lotterySlug, students, finalOptions) {
   return filePath;
 }
 
-module.exports = { saveXLSX };
+module.exports = { saveStudioXLSX };

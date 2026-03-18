@@ -7,14 +7,19 @@
  *    - Deferred Acceptance: Maximizes first-choice assignments (greedy)
  *    - Minimum Regret: Balances overall satisfaction
  *
- * 2. LLM (Llama-3.1-70B) handles natural language processing
- *    - Extracts constraints from advisor notes and parameters
+ * 2. LLM handles natural language processing
+ *    - Extracts constraints (including per-entity capacity overrides) from advisor notes and parameters
  *    - Validates algorithm outputs for constraint violations
  *    - Triggers retries with adjusted constraints when violations detected
  *
  * 3. Robust error handling with fallbacks
- *    - LLM failures fall back to regex-based validation
+ *    - LLM failures fall back to empty constraints
  *    - Algorithm adjustments handle conditional capacity constraints
+ *
+ * File layout:
+ *   server/shared/   — algorithms, LLM, anonymization, CSV, file I/O
+ *   server/studio/   — studio-mode XLSX export
+ *   server/advisor/  — advisor-mode XLSX export
  */
 
 const path = require('path');
@@ -22,21 +27,25 @@ const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const archiver = require('archiver');
 const slugify = require('slugify');
 const dotenv = require('dotenv');
-const { validateRequestPayload, validateAndAnnotate } = require('./utils/validate');
-const { extractConstraints, validateAssignments } = require('./utils/hf');
-const { OUTPUT_DIR, ensureOutputsDir, writeJSON } = require('./utils/fileio');
-const { saveOptionCSVs } = require('./utils/csv');
-const { saveXLSX } = require('./utils/xlsx');
-const { createNameMapping } = require('./utils/anonymize');
+
+const { validateRequestPayload } = require('./shared/validate');
+const { extractConstraints, validateAssignments } = require('./shared/constraints');
+const { OUTPUT_DIR, ensureOutputsDir, writeJSON } = require('./shared/fileio');
+const { saveOptionCSVs } = require('./shared/csv');
+const { saveStudioXLSX } = require('./studio/xlsx');
+const { saveAdvisorXLSX } = require('./advisor/xlsx');
+const { createNameMapping } = require('./shared/anonymize');
 const {
+  normalizeKey,
   runWaterFillingAlgorithm,
   runDeferredAcceptance,
   runMinimumRegretAlgorithm,
   validateConstraints,
   adjustAdvisorsForRetry
-} = require('./utils/algorithms');
+} = require('./shared/algorithms');
 
 const envPath = path.join(__dirname, '..', '.env');
 // eslint-disable-next-line no-console
@@ -44,8 +53,6 @@ console.log(`[SERVER] Loading .env from: ${envPath}`);
 const dotenvResult = dotenv.config({ path: envPath, override: true });
 // eslint-disable-next-line no-console
 console.log(`[SERVER] dotenv result:`, dotenvResult.error ? `ERROR: ${dotenvResult.error}` : `SUCCESS (${Object.keys(dotenvResult.parsed || {}).length} vars)`);
-// eslint-disable-next-line no-console
-console.log(`[SERVER] dotenv parsed:`, dotenvResult.parsed);
 
 const sharedPassword = process.env.APP_SHARED_PASSWORD;
 const port = process.env.PORT || 4747;
@@ -56,7 +63,6 @@ console.log(`[SERVER] Shared password is ${sharedPassword ? 'SET (length: ' + sh
 
 const app = express();
 
-// Trust proxy for Cloudflare tunnel - trust 1 hop (the tunnel)
 app.set('trust proxy', 1);
 
 app.use(
@@ -71,10 +77,9 @@ const limiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { trustProxy: false } // Disable validation warning for Cloudflare
+  validate: { trustProxy: false }
 });
 
-// Higher ceiling for polling job status; keep stricter limit for mutation endpoints
 const statusLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 600,
@@ -98,6 +103,35 @@ function serializeZodError(error) {
 
 function createJobId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+/**
+ * Apply per-entity capacity overrides extracted from additional parameters.
+ * Override minCapacity and/or maxCapacity (capacity) for named advisors/studios.
+ * Per-entity overrides take precedence over the global default.
+ *
+ * @param {Array} advisors - Original advisor array
+ * @param {Array} overrides - capacityOverrides from extractedConstraints
+ * @returns {Array} New advisor array with overrides applied
+ */
+function applyCapacityOverrides(advisors, overrides) {
+  if (!overrides || overrides.length === 0) return advisors;
+
+  return advisors.map((advisor) => {
+    const override = overrides.find(
+      (o) => normalizeKey(o.name) === normalizeKey(advisor.name)
+    );
+    if (!override) return advisor;
+
+    const updated = { ...advisor };
+    if (override.minCapacity !== undefined && override.minCapacity !== null) {
+      updated.minCapacity = override.minCapacity;
+    }
+    if (override.maxCapacity !== undefined && override.maxCapacity !== null) {
+      updated.capacity = override.maxCapacity;
+    }
+    return updated;
+  });
 }
 
 async function runJob(jobId, requestData, lotterySlug, mode) {
@@ -127,11 +161,36 @@ async function handleLottery(requestData, lotterySlug, mode) {
     { id: 3, runner: runMinimumRegretAlgorithm }
   ];
 
+  // STEP 0: Extract constraints using LLM (including per-entity capacity overrides)
+  // eslint-disable-next-line no-console
+  console.log('  [0/3] Extracting constraints from natural language...');
+  const extractionResult = await extractConstraints(
+    requestData.advisors,
+    requestData.parameters,
+    realToPseudo,
+    pseudoToReal,
+    mode
+  );
+  const extractedConstraints = extractionResult.constraints;
+  const extractionLLMPayload = extractionResult.llmPayload;
+
+  // Apply per-entity capacity overrides from additional parameters.
+  // These take precedence over the global min/max for named advisors/studios.
+  const advisorsWithOverrides = applyCapacityOverrides(
+    requestData.advisors,
+    extractedConstraints.capacityOverrides || []
+  );
+
+  if (advisorsWithOverrides !== requestData.advisors && extractedConstraints.capacityOverrides?.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`  Applied ${extractedConstraints.capacityOverrides.length} per-entity capacity override(s)`);
+  }
+
   const runAlgorithmWithRetry = (runner) => {
-    let option = runner(requestData.students, requestData.advisors, requestData.parameters, mode);
+    let option = runner(requestData.students, advisorsWithOverrides, requestData.parameters, mode);
     const constraints = validateConstraints(
       option.assignments,
-      requestData.advisors,
+      advisorsWithOverrides,
       requestData.students,
       requestData.parameters,
       mode
@@ -141,7 +200,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
       // eslint-disable-next-line no-console
       console.log('    Constraint violation detected, adjusting and retrying...');
       const adjustedAdvisors = adjustAdvisorsForRetry(
-        requestData.advisors,
+        advisorsWithOverrides,
         constraints.zeroOrMaxViolations
       );
       option = runner(requestData.students, adjustedAdvisors, requestData.parameters, mode);
@@ -164,20 +223,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
     return runner(requestData.students, adjustedAdvisors, requestData.parameters, mode);
   };
 
-  // STEP 0: Extract constraints using LLM
-  // eslint-disable-next-line no-console
-  console.log('  [0/3] Extracting constraints from natural language...');
-  const extractionResult = await extractConstraints(
-    requestData.advisors,
-    requestData.parameters,
-    realToPseudo,
-    pseudoToReal,
-    mode
-  );
-  const extractedConstraints = extractionResult.constraints;
-  const extractionLLMPayload = extractionResult.llmPayload;
-
-  // STEP 1–3: Run algorithms with constraint retries
+  // STEP 1–3: Run algorithms
   const finalOptions = [];
   const labels = [
     '[1/3] Running water-filling algorithm (minimax)...',
@@ -219,9 +265,6 @@ async function handleLottery(requestData, lotterySlug, mode) {
       commentary: validation.commentary || []
     };
 
-    // Keep deterministic note; LLM summaries tend to be noisy
-    finalOptions[i].summary.notes = finalOptions[i].summary.notes;
-
     if (!validation.isValid && validation.violations.length > 0) {
       // eslint-disable-next-line no-console
       console.log(`    Option ${option.id} has violations:`, validation.violations);
@@ -235,7 +278,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
         // eslint-disable-next-line no-console
         console.log(`    Retrying Option ${option.id} with adjusted constraints...`);
 
-        const adjustedAdvisors = requestData.advisors.map((advisor) => {
+        const adjustedAdvisors = advisorsWithOverrides.map((advisor) => {
           if (violatedAdvisors.includes(advisor.name)) {
             return { ...advisor, capacity: 0 };
           }
@@ -269,8 +312,6 @@ async function handleLottery(requestData, lotterySlug, mode) {
             warnings: revalidation.warnings || [],
             commentary: revalidation.commentary || []
           };
-
-          finalOptions[i].summary.notes = finalOptions[i].summary.notes;
         }
       }
     }
@@ -279,16 +320,13 @@ async function handleLottery(requestData, lotterySlug, mode) {
       // eslint-disable-next-line no-console
       console.log(`    Option ${option.id} has ${validation.warnings.length} warning(s)`);
     }
-    if (validation.commentary && validation.commentary.length > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`    Option ${option.id} commentary: ${validation.commentary.length} goal(s) assessed`);
-    }
   }
 
   const promptLog = {
     timestamp: new Date().toISOString(),
     approach: 'Three Deterministic Algorithms with LLM Constraint Extraction & Validation',
     extractedConstraints,
+    capacityOverridesApplied: extractedConstraints.capacityOverrides || [],
     option1_stats: finalOptions[0].summary,
     option2_stats: finalOptions[1].summary,
     option3_stats: finalOptions[2].summary,
@@ -322,9 +360,16 @@ async function handleLottery(requestData, lotterySlug, mode) {
   outputWritePromises.push(
     writeJSON(path.join(OUTPUT_DIR, `${lotterySlug}_llm-payloads.json`), anonymizationLog)
   );
+
+  // Generate XLSX for both modes
   if (mode === 'studio') {
-    outputWritePromises.push(saveXLSX(lotterySlug, requestData.students, finalOptions));
+    outputWritePromises.push(saveStudioXLSX(lotterySlug, requestData.students, finalOptions));
+  } else {
+    outputWritePromises.push(
+      saveAdvisorXLSX(lotterySlug, requestData.students, requestData.advisors, finalOptions)
+    );
   }
+
   await Promise.all(outputWritePromises);
 
   // eslint-disable-next-line no-console
@@ -333,7 +378,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
   return {
     lotterySlug,
     mode,
-    ...(mode === 'studio' ? { xlsxPath: `/download/${lotterySlug}_output.xlsx` } : {}),
+    xlsxPath: `/download/${lotterySlug}_output.xlsx`,
     options: finalOptions.map((option) => ({
       id: option.id,
       summary: option.summary,
@@ -342,6 +387,8 @@ async function handleLottery(requestData, lotterySlug, mode) {
     }))
   };
 }
+
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 app.post('/api/run', limiter, async (req, res) => {
   try {
@@ -424,15 +471,17 @@ app.post('/api/provider', (req, res) => {
     return res.status(400).json({ error: 'Invalid provider. Must be "ollama" or "huggingface".' });
   }
 
-  // Update the environment variable for the current process
   process.env.LLM_PROVIDER = provider.toLowerCase();
-
   // eslint-disable-next-line no-console
   console.log(`[SERVER] LLM provider switched to: ${process.env.LLM_PROVIDER}`);
 
   return res.json({ provider: process.env.LLM_PROVIDER });
 });
 
+/**
+ * Download a single output file (CSV, XLSX, JSON).
+ * No auth required — consistent with the zip endpoint below.
+ */
 app.get('/download/:file', (req, res) => {
   const requested = req.params.file;
   if (!/^[a-z0-9_.-]+$/i.test(requested)) {
@@ -445,6 +494,43 @@ app.get('/download/:file', (req, res) => {
   }
 
   return res.download(filePath);
+});
+
+/**
+ * Download a zip archive containing all three CSV outputs for a given lottery.
+ * No auth required — the slug is derived from the lottery name and not easily guessable.
+ */
+app.get('/api/zip/:slug', (req, res) => {
+  const { slug } = req.params;
+  if (!/^[a-z0-9_-]+$/i.test(slug)) {
+    return res.status(400).json({ error: 'Invalid slug.' });
+  }
+
+  const files = [1, 2, 3].map((i) => ({
+    diskPath: path.join(OUTPUT_DIR, `${slug}_output${i}.csv`),
+    archiveName: `${slug}_output${i}.csv`
+  }));
+
+  const existing = files.filter((f) => fs.existsSync(f.diskPath));
+  if (existing.length === 0) {
+    return res.status(404).json({ error: 'No CSV files found for this lottery.' });
+  }
+
+  res.setHeader('Content-Disposition', `attachment; filename="${slug}_outputs.zip"`);
+  res.setHeader('Content-Type', 'application/zip');
+
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.on('error', (err) => {
+    // eslint-disable-next-line no-console
+    console.error('[ZIP] Archive error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to create zip archive.' });
+    }
+  });
+
+  archive.pipe(res);
+  existing.forEach((f) => archive.file(f.diskPath, { name: f.archiveName }));
+  archive.finalize();
 });
 
 app.listen(port, () => {

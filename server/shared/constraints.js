@@ -1,14 +1,20 @@
-// Import the LLM abstraction layer that handles multiple providers
+/**
+ * LLM-powered constraint extraction and assignment validation.
+ * Shared by both studio and advisor modes via the `mode` parameter.
+ */
+
 const { callModel } = require('./llm');
 
 /**
- * Extract constraints and preferences from natural language using LLM
- * Categorizes into hard constraints, soft constraints, and optimization goals
+ * Extract constraints and preferences from natural language using LLM.
+ * Now also extracts per-entity capacity overrides (e.g. "Studio H can go as low as 6")
+ * from the additional parameters field.
  *
  * @param {Array} advisors - Real advisor data
  * @param {string} parameters - Additional parameters text
  * @param {Map} realToPseudo - Name mapping for anonymization
  * @param {Map} pseudoToReal - Reverse mapping for de-anonymization
+ * @param {string} mode - 'advisor' or 'studio'
  */
 async function extractConstraints(advisors, parameters, realToPseudo, pseudoToReal, mode = 'advisor') {
   const terminology = mode === 'studio' ? 'studio' : 'advisor';
@@ -17,26 +23,32 @@ async function extractConstraints(advisors, parameters, realToPseudo, pseudoToRe
 
   const systemPrompt = `You are a constraint extraction assistant. Parse natural language text to identify assignment rules and preferences for ${terminology} assignments.
 
-Categorize into three types:
+Categorize into three types plus capacity overrides:
 
 1. HARD CONSTRAINTS (must be satisfied - violations require algorithm retry):
    - Conditional capacity: "must have 0 or 2", "needs 1 or 3", "all or nothing", "either X or Y students"
-     IMPORTANT: Do NOT treat "minimum X" or "maximum X" as conditional capacity - these are handled separately by the backend
-     Only include constraints that specify DISCRETE allowed values (e.g., "0 or 2", "either 1 or 3")
+     IMPORTANT: Only include constraints that specify DISCRETE allowed values (e.g., "0 or 2", "either 1 or 3")
    - Forbidden pairs: "cannot work with", "does not want", "should avoid", "won't ${verbForm}"
    - Required pairs: "must work with", "should be assigned to"
 
-2. SOFT CONSTRAINTS (should be satisfied - generate warnings if not met):
+2. CAPACITY OVERRIDES (per-entity min/max that differ from the global default):
+   Only extract from ADDITIONAL PARAMETERS, not from ${terminology} notes (those are handled by the backend).
+   Examples: "Studio H can go as low as 6 students", "Studio A must have at least 10 students",
+   "Advisor Smith can take up to 5 students this semester".
+   Also handle creative restructuring like "all studios must have an even number of students"
+   by adding a conditionalCapacity for each named ${terminology} with appropriate allowedCounts.
+   Do NOT extract the global minimum or maximum that applies to all ${terminologyPlural} equally
+   (those are embedded in the ${terminology} notes and handled separately).
+
+3. SOFT CONSTRAINTS (should be satisfied - generate warnings if not met):
    - Preferences: "prefer", "would like", "ideally", "if possible"
    - Priorities: "priority should be given to", "senior students first"
    - Balance goals: "try to balance", "avoid having too many/few"
 
-3. OPTIMIZATION GOALS (guide user's choice - generate commentary):
+4. OPTIMIZATION GOALS (guide user's choice - generate commentary):
    - Minimize/maximize metrics: "minimize travel", "maximize satisfaction"
    - Distribution preferences: "spread evenly", "avoid concentrating"
    - General objectives: "fairness", "equity", "workload balance"
-
-NOTE: Ignore "minimum X students" or "maximum X students" constraints - the backend algorithms handle these automatically using capacity fields.
 
 Return a JSON object:
 {
@@ -51,6 +63,9 @@ Return a JSON object:
       {"advisorName": "string (${terminology} name)", "studentName": "string", "rawText": "original text"}
     ]
   },
+  "capacityOverrides": [
+    {"name": "string (${terminology} name)", "minCapacity": number_or_null, "maxCapacity": number_or_null, "rawText": "original text"}
+  ],
   "softConstraints": [
     {"type": "preference" | "priority" | "balance", "scope": "global" | "specific", "target": "string (${terminology}/student name if specific)", "description": "clear description", "rawText": "original text"}
   ],
@@ -59,14 +74,14 @@ Return a JSON object:
   ]
 }`;
 
-  const { anonymizeAdvisors, anonymizeText, deanonymizeConstraints } = require('./anonymize');
+  const {
+    anonymizeAdvisors,
+    anonymizeText,
+    deanonymizeConstraints
+  } = require('./anonymize');
 
-  // Anonymize advisor data before sending to LLM
   const anonymizedAdvisors = anonymizeAdvisors(advisors, realToPseudo);
   const anonymizedParameters = anonymizeText(parameters, realToPseudo);
-
-  const terminologyUpper = terminology.toUpperCase();
-  const terminologyPluralUpper = terminologyPlural.toUpperCase();
 
   const advisorConstraints = anonymizedAdvisors
     .filter((a) => a.notes && a.notes.trim().length > 0)
@@ -75,7 +90,7 @@ Return a JSON object:
 
   const userPrompt = `Extract and categorize all constraints, preferences, and goals from the following:
 
-${terminologyPluralUpper}:
+${terminologyPlural.toUpperCase()}:
 ${advisorConstraints || 'None'}
 
 ADDITIONAL PARAMETERS:
@@ -96,10 +111,13 @@ Return only the JSON object, no additional text.`;
       throw new Error(`LLM returned invalid JSON: ${parseError.message}`);
     }
 
-    // De-anonymize the results before returning
+    // Ensure capacityOverrides exists even if the LLM omitted it
+    if (!anonymizedConstraints.capacityOverrides) {
+      anonymizedConstraints.capacityOverrides = [];
+    }
+
     const deanonymizedConstraints = deanonymizeConstraints(anonymizedConstraints, pseudoToReal);
 
-    // Return both de-anonymized results and the anonymized data sent to LLM
     return {
       constraints: deanonymizedConstraints,
       llmPayload: {
@@ -115,6 +133,7 @@ Return only the JSON object, no additional text.`;
     return {
       constraints: {
         hardConstraints: { conditionalCapacity: [], forbiddenPairs: [], requiredPairs: [] },
+        capacityOverrides: [],
         softConstraints: [],
         optimizationGoals: []
       },
@@ -124,16 +143,8 @@ Return only the JSON object, no additional text.`;
 }
 
 /**
- * Validate algorithm outputs using LLM
- * Returns violations (hard), warnings (soft), and commentary (optimization goals)
- *
- * @param {Array} advisors - Real advisor data
- * @param {Array} students - Real student data
- * @param {string} parameters - Additional parameters text
- * @param {Array} assignments - Algorithm assignments
- * @param {Object} extractedConstraints - Already de-anonymized constraints
- * @param {Map} realToPseudo - Name mapping for anonymization
- * @param {Map} pseudoToReal - Reverse mapping for de-anonymization
+ * Validate algorithm outputs using LLM.
+ * Returns violations (hard), warnings (soft), and commentary (optimization goals).
  */
 async function validateAssignments(advisors, students, parameters, assignments, extractedConstraints, realToPseudo, pseudoToReal, mode = 'advisor') {
   const terminology = mode === 'studio' ? 'studio' : 'advisor';
@@ -144,28 +155,27 @@ async function validateAssignments(advisors, students, parameters, assignments, 
 Review THREE categories:
 
 1. HARD CONSTRAINTS (violations block the solution):
-   - Conditional capacity: ${terminology} must have specific student counts (ONLY check constraints from EXTRACTED CONSTRAINTS, ignore notes like "minimum X")
+   - Conditional capacity: ${terminology} must have specific student counts (ONLY check constraints from EXTRACTED CONSTRAINTS)
    - Forbidden pairs: specific ${terminology}-student pairs that cannot be matched
    - Required pairs: specific ${terminology}-student pairs that must be matched
    - Capacity limits: ${terminologyPlural} cannot exceed their maximum capacity
 
-IMPORTANT: Do NOT report violations for "minimum X students" or "maximum X students" constraints in notes.
-The backend algorithms automatically enforce minimum/maximum capacity constraints. Only check the conditional capacity constraints from EXTRACTED CONSTRAINTS.
+IMPORTANT: Do NOT report violations for minimum/maximum capacity constraints in notes.
+The backend algorithms automatically enforce capacity constraints. Only check the conditional capacity constraints from EXTRACTED CONSTRAINTS.
 
 2. SOFT CONSTRAINTS (warnings don't block, but inform the user):
-   - Preferences not met (e.g., "prefer to balance workload" but some ${terminologyPlural} have 0)
-   - Priorities not followed (e.g., "senior students first" but juniors got better placements)
-   - Balance goals not achieved (e.g., "avoid 0 students" but several ${terminologyPlural} have 0)
+   - Preferences not met
+   - Priorities not followed
+   - Balance goals not achieved
 
 3. OPTIMIZATION GOALS (commentary helps user choose):
    - How well did this option achieve stated goals?
-   - Metrics: count ${terminologyPlural} with 0 students, variance in workload, etc.
    - Neutral, factual assessment to help user compare options
 
 Return a JSON object:
 {
   "isValid": boolean (false only if hard constraints violated),
-  "userFacingSummary": "2-3 sentence plain-language explanation of this option's results. Describe what the algorithm prioritizes in the first sentence. Focus on student placement quality (average rank, % first choice). Do NOT mention minimum capacity constraints - those are automatically enforced. Use '${terminology}' when referring to ${terminologyPlural}.",
+  "userFacingSummary": "2-3 sentence plain-language explanation of this option's results.",
   "violations": [
     {"type": "conditional_capacity" | "forbidden_pair" | "required_pair" | "capacity_exceeded", "advisorName": "string", "studentName": "string (if applicable)", "message": "clear explanation"}
   ],
@@ -185,15 +195,11 @@ Return a JSON object:
     deanonymizeValidation
   } = require('./anonymize');
 
-  // Anonymize data before sending to LLM
   const anonymizedAdvisors = anonymizeAdvisors(advisors, realToPseudo);
   const anonymizedAssignments = anonymizeAssignments(assignments, realToPseudo);
   const anonymizedParameters = anonymizeText(parameters, realToPseudo);
-
-  // Re-anonymize the constraints (they were de-anonymized after extraction)
   const anonymizedConstraints = anonymizeConstraints(extractedConstraints, realToPseudo);
 
-  // Build assignment summary with anonymized data
   const assignmentsByAdvisor = new Map();
   anonymizedAssignments.forEach((assignment) => {
     if (!assignmentsByAdvisor.has(assignment.advisor)) {
@@ -201,9 +207,6 @@ Return a JSON object:
     }
     assignmentsByAdvisor.get(assignment.advisor).push(assignment.student);
   });
-
-  const terminologyUpper = terminology.toUpperCase();
-  const terminologyPluralUpper = terminologyPlural.toUpperCase();
 
   const assignmentSummary = anonymizedAdvisors
     .map((advisor) => {
@@ -220,7 +223,7 @@ ${JSON.stringify(anonymizedConstraints, null, 2)}
 ASSIGNMENTS:
 ${assignmentSummary}
 
-${terminologyUpper} NOTES AND PARAMETERS (for reference):
+${terminologyPlural.toUpperCase()} NOTES AND PARAMETERS (for reference):
 ${anonymizedAdvisors.map((a) => `${a.name}: ${a.notes || 'none'}`).join('\n')}
 Parameters: ${anonymizedParameters || 'none'}
 
@@ -240,10 +243,8 @@ Return only the JSON object, no additional text.`;
       throw new Error(`LLM returned invalid JSON: ${parseError.message}`);
     }
 
-    // De-anonymize the results before returning
     const deanonymizedValidation = deanonymizeValidation(anonymizedValidation, pseudoToReal);
 
-    // Return both de-anonymized results and the anonymized data sent to LLM
     return {
       validation: deanonymizedValidation,
       llmPayload: {
@@ -266,7 +267,6 @@ Return only the JSON object, no additional text.`;
 }
 
 module.exports = {
-  callModel,
   extractConstraints,
   validateAssignments
 };

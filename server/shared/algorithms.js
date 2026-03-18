@@ -1,5 +1,6 @@
 /**
  * Matching algorithms for advisor-student lottery assignment
+ * Shared by both studio and advisor modes.
  */
 
 function normalizeKey(value) {
@@ -20,13 +21,23 @@ function extractMinimumCapacity(notes) {
 }
 
 /**
+ * Resolve effective min capacity for an advisor object.
+ * Uses explicit minCapacity field if set, otherwise parses notes.
+ */
+function resolveMinCapacity(advisor) {
+  return advisor.minCapacity !== undefined
+    ? advisor.minCapacity
+    : extractMinimumCapacity(advisor.notes || '');
+}
+
+/**
  * Check if assignment is mathematically feasible given min/max constraints
  * Returns: { feasible: boolean, reason?: string }
  */
 function checkFeasibility(students, advisors, mode = 'advisor') {
   const totalStudents = students.length;
   const totalMaxCapacity = advisors.reduce((sum, a) => sum + a.capacity, 0);
-  const totalMinCapacity = advisors.reduce((sum, a) => sum + (a.minCapacity || 0), 0);
+  const totalMinCapacity = advisors.reduce((sum, a) => sum + resolveMinCapacity(a), 0);
   const terminology = mode === 'studio' ? 'studio' : 'advisor';
   const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
 
@@ -71,22 +82,15 @@ function calculateSummaryStats(assignments) {
 
 /**
  * Water-filling algorithm: Minimizes worst-case placement
- * 1. Place all students in their first choice
- * 2. For overloaded advisors, move students with best alternatives
- * 3. Repeat until all capacity constraints are met
  */
 function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'advisor') {
-  // Build lookup maps
   const advisorMap = new Map();
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
-    const minCapacity = advisor.minCapacity !== undefined
-      ? advisor.minCapacity
-      : extractMinimumCapacity(advisor.notes || '');
     advisorMap.set(key, {
       name: advisor.name,
       capacity: advisor.capacity,
-      minCapacity: minCapacity,
+      minCapacity: resolveMinCapacity(advisor),
       notes: advisor.notes || '',
       assigned: []
     });
@@ -103,7 +107,6 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
     });
   });
 
-  // Check feasibility
   const feasibility = checkFeasibility(students, Array.from(advisorMap.values()), mode);
   if (!feasibility.feasible) {
     return {
@@ -115,7 +118,9 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
         percentFirstChoice: 0,
         lowestPlacement: 0,
         notes: `Infeasible: ${feasibility.reason}`,
-        strategyUsed: 'Balanced Minimax - Minimizes worst-case placement'
+        strategyUsed: 'Balanced Minimax - Minimizes worst-case placement',
+        studioSizes: {},
+        allStudentsAssigned: false
       }
     };
   }
@@ -141,10 +146,8 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
     let madeChange = false;
     iteration += 1;
 
-    // Find overloaded advisors
     for (const [advisorKey, advisor] of advisorMap.entries()) {
       if (advisor.assigned.length > advisor.capacity) {
-        // Find student with best alternative among assigned students
         let bestAlternative = null;
         let bestAltRank = Infinity;
         let bestAltNextAdvisor = null;
@@ -154,7 +157,6 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
           const student = studentPreferences.get(studentKey);
           if (!student) return;
 
-          // Find next available advisor
           for (let i = student.currentRank; i < student.preferences.length; i += 1) {
             const nextAdvisorKey = student.preferences[i];
             const nextAdvisor = advisorMap.get(nextAdvisorKey);
@@ -170,31 +172,21 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
           }
         });
 
-        // Move student with best alternative
         if (bestAlternative && bestAltNextAdvisor) {
-          // Remove from current advisor
           advisor.assigned = advisor.assigned.filter(
             (name) => normalizeKey(name) !== normalizeKey(bestAlternative.name)
           );
-
-          // Add to new advisor
           const newAdvisor = advisorMap.get(bestAltNextAdvisor);
           newAdvisor.assigned.push(bestAlternative.name);
-
-          // Update student
           bestAlternative.currentAdvisor = bestAltNextAdvisor;
           bestAlternative.currentRank = bestAltRank;
-
           madeChange = true;
         } else {
-          // Can't resolve this overload, force to next available
           const studentToMove = advisor.assigned[0];
           const studentKey = normalizeKey(studentToMove);
           const student = studentPreferences.get(studentKey);
-
           advisor.assigned.shift();
 
-          // Find ANY advisor with space
           let foundSpace = false;
           for (const [nextAdvisorKey, nextAdvisor] of advisorMap.entries()) {
             if (nextAdvisor.assigned.length < nextAdvisor.capacity) {
@@ -209,7 +201,6 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
           }
 
           if (!foundSpace) {
-            // This should not happen if total capacity >= students
             throw new Error('Unable to assign all students: insufficient total capacity');
           }
         }
@@ -220,9 +211,6 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
   }
 
   // Phase 3: Enforce minimum capacity constraints
-  // Process studios with the largest shortfall first so no studio is starved
-  // by map-insertion order. Within each studio, always pull from the most
-  // overfull donor so no donor is prematurely drained to its minimum.
   {
     const getUnderenrolled = () => {
       const result = [];
@@ -235,7 +223,6 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
 
     for (const { key: underKey, advisor: underAdvisor } of getUnderenrolled()) {
       while (underAdvisor.assigned.length < underAdvisor.minCapacity) {
-        // Recompute donor list each pass so slack values are always current
         const donors = [];
         advisorMap.forEach((advisor, key) => {
           const slack = advisor.assigned.length - advisor.minCapacity;
@@ -243,9 +230,8 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
         });
         donors.sort((a, b) => b.slack - a.slack);
 
-        if (donors.length === 0) break; // Cannot fill further
+        if (donors.length === 0) break;
 
-        // Prefer a student who ranked the underenrolled studio
         let bestStudent = null;
         let bestStudentDonorKey = null;
         let bestRank = Infinity;
@@ -263,7 +249,6 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
           }
         }
 
-        // Fallback: take the first student from the highest-slack donor
         if (!bestStudent) {
           const { key: dKey, advisor: dAdvisor } = donors[0];
           const studentName = dAdvisor.assigned[0];
@@ -272,9 +257,8 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
           bestRank = 999;
         }
 
-        if (!bestStudent) break; // Give up on this studio
+        if (!bestStudent) break;
 
-        // Move student from donor to underenrolled studio
         const donorAdvisor = advisorMap.get(bestStudentDonorKey);
         donorAdvisor.assigned = donorAdvisor.assigned.filter(
           (n) => normalizeKey(n) !== normalizeKey(bestStudent.name)
@@ -298,7 +282,6 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
 
   const stats = calculateSummaryStats(assignments);
 
-  // Check for minimum capacity violations
   const minimumViolations = [];
   advisorMap.forEach((advisor) => {
     if (advisor.assigned.length < advisor.minCapacity) {
@@ -311,7 +294,14 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
     }
   });
 
-  const terminology = mode === 'studio' ? 'studio' : 'advisor';
+  const studioSizes = {};
+  advisorMap.forEach((advisor) => {
+    studioSizes[advisor.name] = advisor.assigned.length;
+  });
+
+  const assignedSet = new Set(assignments.map((a) => a.student));
+  const allStudentsAssigned = students.every((s) => assignedSet.has(s.name));
+
   const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
 
   return {
@@ -325,7 +315,9 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
       notes: `Minimized worst-case placement by systematically moving students with best alternatives among ${terminologyPlural}. Converged in ${iteration} iterations.`,
       strategyUsed: 'Balanced Minimax - Minimizes worst-case placement',
       constraintsSatisfied: minimumViolations.length === 0,
-      minimumCapacityViolations: minimumViolations
+      minimumCapacityViolations: minimumViolations,
+      studioSizes,
+      allStudentsAssigned
     }
   };
 }
@@ -335,19 +327,15 @@ function runWaterFillingAlgorithm(students, advisors, parameters = '', mode = 'a
  * Maximizes first choices while maintaining stability
  */
 function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advisor') {
-  // Build lookup maps
   const advisorMap = new Map();
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
-    const minCapacity = advisor.minCapacity !== undefined
-      ? advisor.minCapacity
-      : extractMinimumCapacity(advisor.notes || '');
     advisorMap.set(key, {
       name: advisor.name,
       capacity: advisor.capacity,
-      minCapacity: minCapacity,
+      minCapacity: resolveMinCapacity(advisor),
       notes: advisor.notes || '',
-      tentativeMatches: [] // [{studentName, rank}]
+      tentativeMatches: []
     });
   });
 
@@ -362,7 +350,6 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
     });
   });
 
-  // Check feasibility
   const feasibility = checkFeasibility(students, Array.from(advisorMap.values()), mode);
   if (!feasibility.feasible) {
     return {
@@ -374,26 +361,25 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
         percentFirstChoice: 0,
         lowestPlacement: 0,
         notes: `Infeasible: ${feasibility.reason}`,
-        strategyUsed: 'Maximize First Choices - Prioritizes number of students getting #1'
+        strategyUsed: 'Maximize First Choices - Prioritizes number of students getting #1',
+        studioSizes: {},
+        allStudentsAssigned: false
       }
     };
   }
 
-  // Deferred acceptance loop
   const MAX_ITERATIONS = 10000;
   let iteration = 0;
 
   while (iteration < MAX_ITERATIONS) {
     iteration += 1;
 
-    // Find an unmatched student who hasn't exhausted preferences
     const unmatchedStudent = studentQueue.find(
       (s) => !s.matched && s.nextProposalIndex < s.preferences.length
     );
 
-    if (!unmatchedStudent) break; // All students matched or exhausted preferences
+    if (!unmatchedStudent) break;
 
-    // Student proposes to next advisor on list
     const proposedAdvisorKey = unmatchedStudent.preferences[unmatchedStudent.nextProposalIndex];
     const advisor = advisorMap.get(proposedAdvisorKey);
 
@@ -405,35 +391,19 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
     const proposalRank = unmatchedStudent.nextProposalIndex + 1;
 
     if (advisor.tentativeMatches.length < advisor.capacity) {
-      // Advisor has space, accept tentatively
-      advisor.tentativeMatches.push({
-        studentName: unmatchedStudent.name,
-        rank: proposalRank
-      });
+      advisor.tentativeMatches.push({ studentName: unmatchedStudent.name, rank: proposalRank });
       unmatchedStudent.matched = true;
     } else {
-      // Advisor is full, check if this student is better than worst current match
-      // For greedy approach, accept anyone (first-come basis)
-      // We'll just accept and bump the worst
-      advisor.tentativeMatches.push({
-        studentName: unmatchedStudent.name,
-        rank: proposalRank
-      });
-
-      // Sort by rank (lower is better) and remove worst
+      advisor.tentativeMatches.push({ studentName: unmatchedStudent.name, rank: proposalRank });
       advisor.tentativeMatches.sort((a, b) => a.rank - b.rank);
       const rejected = advisor.tentativeMatches.pop();
 
       if (rejected.studentName === unmatchedStudent.name) {
-        // This student was rejected
         unmatchedStudent.nextProposalIndex += 1;
         unmatchedStudent.matched = false;
       } else {
-        // Someone else was rejected
         unmatchedStudent.matched = true;
-        const rejectedStudent = studentQueue.find(
-          (s) => s.name === rejected.studentName
-        );
+        const rejectedStudent = studentQueue.find((s) => s.name === rejected.studentName);
         if (rejectedStudent) {
           rejectedStudent.matched = false;
           rejectedStudent.nextProposalIndex =
@@ -444,8 +414,6 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
   }
 
   // Phase 3: Enforce minimum capacity constraints
-  // Same greedy-fill approach as Water-Filling: largest shortfall first,
-  // pull from highest-slack donors, recompute each pass.
   {
     const getUnderenrolledDA = () => {
       const result = [];
@@ -484,7 +452,6 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
           }
         }
 
-        // Fallback: take first match from highest-slack donor
         if (!bestMatch) {
           const { key: dKey, advisor: dAdvisor } = donors[0];
           bestMatch = dAdvisor.tentativeMatches[0];
@@ -507,18 +474,13 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
   const assignments = [];
   advisorMap.forEach((advisor) => {
     advisor.tentativeMatches.forEach((match) => {
-      assignments.push({
-        student: match.studentName,
-        advisor: advisor.name,
-        rank: match.rank
-      });
+      assignments.push({ student: match.studentName, advisor: advisor.name, rank: match.rank });
     });
   });
 
-  // Handle unmatched students (if any)
+  // Handle unmatched students
   studentQueue.forEach((student) => {
     if (!student.matched) {
-      // Assign to first advisor with space (shouldn't happen if capacity >= students)
       for (const [advisorKey, advisor] of advisorMap.entries()) {
         if (advisor.tentativeMatches.length < advisor.capacity) {
           assignments.push({
@@ -535,7 +497,6 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
 
   const stats = calculateSummaryStats(assignments);
 
-  // Check for minimum capacity violations
   const minimumViolations = [];
   advisorMap.forEach((advisor) => {
     if (advisor.tentativeMatches.length < advisor.minCapacity) {
@@ -548,7 +509,14 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
     }
   });
 
-  const terminology = mode === 'studio' ? 'studio' : 'advisor';
+  const studioSizes = {};
+  advisorMap.forEach((advisor) => {
+    studioSizes[advisor.name] = advisor.tentativeMatches.length;
+  });
+
+  const assignedSet = new Set(assignments.map((a) => a.student));
+  const allStudentsAssigned = students.every((s) => assignedSet.has(s.name));
+
   const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
 
   return {
@@ -562,27 +530,26 @@ function runDeferredAcceptance(students, advisors, parameters = '', mode = 'advi
       notes: `Maximized first-choice assignments through stable matching. Students propose to ${terminologyPlural} in preference order.`,
       strategyUsed: 'Maximize First Choices - Prioritizes number of students getting #1',
       constraintsSatisfied: minimumViolations.length === 0,
-      minimumCapacityViolations: minimumViolations
+      minimumCapacityViolations: minimumViolations,
+      studioSizes,
+      allStudentsAssigned
     }
   };
 }
 
 /**
  * Check for constraint violations and adjust if needed
- * Returns: { violations: [], adjusted: boolean, adjustedAdvisors: [] }
  */
 function validateConstraints(assignments, advisors, students, parameters = '', mode = 'advisor') {
   const violations = [];
   const advisorCounts = new Map();
   const terminology = mode === 'studio' ? 'studio' : 'advisor';
 
-  // Count assignments per advisor
   assignments.forEach((assignment) => {
     const key = normalizeKey(assignment.advisor);
     advisorCounts.set(key, (advisorCounts.get(key) || 0) + 1);
   });
 
-  // Check "0 or max" constraints
   const zeroOrMaxViolations = [];
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
@@ -603,14 +570,11 @@ function validateConstraints(assignments, advisors, students, parameters = '', m
     }
   });
 
-  // Check minimum capacity constraints
   const minimumViolations = [];
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
     const count = advisorCounts.get(key) || 0;
-    const minCapacity = advisor.minCapacity !== undefined
-      ? advisor.minCapacity
-      : extractMinimumCapacity(advisor.notes || '');
+    const minCapacity = resolveMinCapacity(advisor);
 
     if (minCapacity > 0 && count < minCapacity && count > 0) {
       violations.push({
@@ -651,20 +615,15 @@ function adjustAdvisorsForRetry(advisors, violatedAdvisors) {
 /**
  * Minimum Regret Algorithm
  * Minimizes total "regret" across all students
- * Regret = how far each student is from their top choice
  */
 function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = 'advisor') {
-  // Build lookup maps
   const advisorMap = new Map();
   advisors.forEach((advisor) => {
     const key = normalizeKey(advisor.name);
-    const minCapacity = advisor.minCapacity !== undefined
-      ? advisor.minCapacity
-      : extractMinimumCapacity(advisor.notes || '');
     advisorMap.set(key, {
       name: advisor.name,
       capacity: advisor.capacity,
-      minCapacity: minCapacity,
+      minCapacity: resolveMinCapacity(advisor),
       notes: advisor.notes || '',
       assigned: []
     });
@@ -681,7 +640,6 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
     };
   });
 
-  // Check feasibility
   const feasibility = checkFeasibility(students, Array.from(advisorMap.values()), mode);
   if (!feasibility.feasible) {
     return {
@@ -693,12 +651,13 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
         percentFirstChoice: 0,
         lowestPlacement: 0,
         notes: `Infeasible: ${feasibility.reason}`,
-        strategyUsed: 'Minimum Regret - Balances overall satisfaction'
+        strategyUsed: 'Minimum Regret - Balances overall satisfaction',
+        studioSizes: {},
+        allStudentsAssigned: false
       }
     };
   }
 
-  // Helper: Count how many available options a student has in their top N choices
   const countAvailableOptions = (student, topN = 5) => {
     let count = 0;
     for (let i = 0; i < Math.min(topN, student.preferences.length); i += 1) {
@@ -711,18 +670,15 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
     return count;
   };
 
-  // Assign students one at a time, dynamically prioritizing those with fewest options
   let assignmentsMade = 0;
   const MAX_ITERATIONS = 1000;
 
   while (assignmentsMade < studentList.length && assignmentsMade < MAX_ITERATIONS) {
-    // Find unassigned student with fewest available options (most constrained)
     let mostConstrainedStudent = null;
     let fewestOptions = Infinity;
 
     for (const student of studentList) {
       if (student.assigned) continue;
-
       const availableOptions = countAvailableOptions(student);
       if (availableOptions < fewestOptions) {
         fewestOptions = availableOptions;
@@ -732,7 +688,6 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
 
     if (!mostConstrainedStudent) break;
 
-    // Assign this student to their best available advisor
     let assigned = false;
     for (let prefIdx = 0; prefIdx < mostConstrainedStudent.preferences.length; prefIdx += 1) {
       const advisorKey = mostConstrainedStudent.preferences[prefIdx];
@@ -751,7 +706,6 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
 
     if (assigned) continue;
 
-    // If couldn't assign to any preference, assign to first available advisor
     for (const [advisorKey, advisor] of advisorMap.entries()) {
       if (advisor.assigned.length < advisor.capacity) {
         advisor.assigned.push(mostConstrainedStudent.name);
@@ -764,13 +718,11 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
     }
   }
 
-  // Now try to improve by swapping students to reduce total regret
-  // Regret = rank - 1 (so rank 1 has 0 regret, rank 2 has 1 regret, etc.)
+  // Swap optimization to reduce total regret
   const MAX_SWAP_ITERATIONS = 100;
   for (let swapIter = 0; swapIter < MAX_SWAP_ITERATIONS; swapIter += 1) {
     let improvedRegret = false;
 
-    // Try swapping pairs of students if it reduces total regret
     for (let i = 0; i < studentList.length; i += 1) {
       for (let j = i + 1; j < studentList.length; j += 1) {
         const student1 = studentList[i];
@@ -783,29 +735,21 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
 
         if (advisor1Key === advisor2Key) continue;
 
-        // Calculate current regret
         const currentRegret = (student1.assignedRank - 1) + (student2.assignedRank - 1);
-
-        // What would regret be if we swapped?
         const student1NewRank = student1.preferences.indexOf(advisor2Key) + 1 || 999;
         const student2NewRank = student2.preferences.indexOf(advisor1Key) + 1 || 999;
         const newRegret = (student1NewRank - 1) + (student2NewRank - 1);
 
-        // Only swap if it reduces total regret
         if (newRegret < currentRegret) {
-          // Perform swap
           const advisor1 = advisorMap.get(advisor1Key);
           const advisor2 = advisorMap.get(advisor2Key);
 
-          // Remove from current advisors
           advisor1.assigned = advisor1.assigned.filter((name) => name !== student1.name);
           advisor2.assigned = advisor2.assigned.filter((name) => name !== student2.name);
 
-          // Assign to new advisors
           advisor2.assigned.push(student1.name);
           advisor1.assigned.push(student2.name);
 
-          // Update student records
           student1.assignedAdvisor = advisor2Key;
           student1.assignedRank = student1NewRank;
           student2.assignedAdvisor = advisor1Key;
@@ -820,7 +764,6 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
   }
 
   // Phase 3: Enforce minimum capacity constraints
-  // Same greedy-fill approach as the other algorithms.
   {
     const getUnderenrolledMR = () => {
       const result = [];
@@ -859,7 +802,6 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
           }
         }
 
-        // Fallback: take first student from highest-slack donor
         if (!bestStudent) {
           const { key: dKey, advisor: dAdvisor } = donors[0];
           const studentName = dAdvisor.assigned[0];
@@ -879,7 +821,6 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
     }
   }
 
-  // Build final assignments
   const assignments = studentList.map((student) => ({
     student: student.name,
     advisor: advisorMap.get(student.assignedAdvisor)?.name || 'Unknown',
@@ -889,7 +830,6 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
   const stats = calculateSummaryStats(assignments);
   const totalRegret = assignments.reduce((sum, a) => sum + (a.rank - 1), 0);
 
-  // Check for minimum capacity violations
   const minimumViolations = [];
   advisorMap.forEach((advisor) => {
     if (advisor.assigned.length < advisor.minCapacity) {
@@ -901,6 +841,14 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
       });
     }
   });
+
+  const studioSizes = {};
+  advisorMap.forEach((advisor) => {
+    studioSizes[advisor.name] = advisor.assigned.length;
+  });
+
+  const assignedSet = new Set(assignments.map((a) => a.student));
+  const allStudentsAssigned = students.every((s) => assignedSet.has(s.name));
 
   const terminology = mode === 'studio' ? 'studio' : 'advisor';
   const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
@@ -916,12 +864,15 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
       notes: `Minimized total regret (sum of distances from top choice) across all students. Total regret: ${totalRegret}. Students with fewer good ${terminology} options were prioritized.`,
       strategyUsed: 'Minimum Regret - Balances overall satisfaction',
       constraintsSatisfied: minimumViolations.length === 0,
-      minimumCapacityViolations: minimumViolations
+      minimumCapacityViolations: minimumViolations,
+      studioSizes,
+      allStudentsAssigned
     }
   };
 }
 
 module.exports = {
+  normalizeKey,
   runWaterFillingAlgorithm,
   runDeferredAcceptance,
   runMinimumRegretAlgorithm,

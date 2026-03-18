@@ -271,7 +271,7 @@ body::before {
 .results-section {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 32px;
 }
 
 .results-meta {
@@ -287,10 +287,54 @@ body::before {
   color: var(--text-color);
 }
 
+/* Results block: heading + content */
+.results-block {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.results-block__heading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+/* Download buttons row */
+.results-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.results-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: var(--radius-pill);
+  background: rgba(62, 108, 179, 0.10);
+  color: var(--accent-blue);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.1s ease;
+  box-shadow: var(--input-shadow);
+}
+
+.results-download-btn:hover {
+  background: rgba(62, 108, 179, 0.18);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(33, 58, 95, 0.18);
+}
+
 .output-grid {
   display: grid;
   gap: 24px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .output-card {
@@ -306,39 +350,20 @@ body::before {
 .output-card__header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .output-card__title {
   font-weight: 600;
   font-size: 16px;
+  flex-shrink: 0;
 }
 
-.output-card__meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.output-card__avg {
   font-size: 0.8rem;
   color: var(--title-color);
-}
-
-.download-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(62, 108, 179, 0.12);
-  color: var(--accent-blue);
-  cursor: pointer;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
-}
-
-.download-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 20px rgba(33, 58, 95, 0.22);
+  text-align: right;
 }
 
 .output-card__body {
@@ -360,11 +385,53 @@ body::before {
   color: var(--title-color);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  flex-shrink: 0;
 }
 
-.output-card__notes {
+/* Studio sizes / advisor load — flows inline, wraps naturally */
+.output-card__sizes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.output-card__sizes strong {
+  font-size: 0.75rem;
+  color: var(--title-color);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.output-card__sizes span {
   line-height: 1.5;
   color: var(--text-color);
+}
+
+/* Constraint check items */
+.output-card__constraints {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.constraint-check {
+  font-size: 0.8rem;
+}
+
+.constraint-check--ok {
+  color: var(--success-color);
+}
+
+.constraint-check--fail {
+  color: var(--error-color);
+}
+
+/* 4-sentence description */
+.output-card__description {
+  line-height: 1.55;
+  color: var(--text-color);
+  padding-top: 4px;
+  border-top: 1px solid rgba(157, 184, 229, 0.2);
 }
 
 .output-card__warning {
@@ -654,53 +721,3 @@ body::before {
   cursor: not-allowed;
 }
 
-/* Constraint Badges */
-.constraint-badge {
-  display: inline-block;
-  padding: 6px 14px;
-  border-radius: var(--radius-pill);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.constraint-badge--satisfied {
-  background: rgba(31, 140, 76, 0.15);
-  color: var(--success-color);
-}
-
-.constraint-badge--violated {
-  background: rgba(185, 56, 79, 0.15);
-  color: var(--error-color);
-}
-
-/* Constraint Violations Display */
-.output-card__violations {
-  padding: 14px 18px;
-  background: rgba(185, 56, 79, 0.08);
-  border-radius: 12px;
-  margin-top: 8px;
-}
-
-.output-card__violations strong {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--error-color);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.output-card__violations ul {
-  margin: 0;
-  padding-left: 20px;
-  list-style-type: disc;
-}
-
-.output-card__violations li {
-  margin: 4px 0;
-  font-size: 0.8rem;
-  color: var(--text-color);
-  line-height: 1.5;
-}
