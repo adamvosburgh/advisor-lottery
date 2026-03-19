@@ -52,7 +52,6 @@ Categorize into three types plus capacity overrides:
 
 Return a JSON object:
 {
-  "parametersHandled": boolean,
   "hardConstraints": {
     "conditionalCapacity": [
       {"advisorName": "string (${terminology} name)", "allowedCounts": [0, 2], "rawText": "original text"}
@@ -73,9 +72,7 @@ Return a JSON object:
   "optimizationGoals": [
     {"type": "minimize" | "maximize" | "distribute" | "general", "metric": "string (what to optimize)", "description": "clear description", "rawText": "original text"}
   ]
-}
-
-Set "parametersHandled" to true ONLY if the ADDITIONAL PARAMETERS text contained at least one constraint successfully mapped to a capacityOverride or hardConstraint entry. Set it to false if the parameters could not be mapped to any enforceable constraint — even if soft constraints or optimization goals were extracted.`;
+}`;
 
   const {
     anonymizeAdvisors,
@@ -118,10 +115,6 @@ Return only the JSON object, no additional text.`;
     if (!anonymizedConstraints.capacityOverrides) {
       anonymizedConstraints.capacityOverrides = [];
     }
-    // Ensure parametersHandled is a boolean
-    if (typeof anonymizedConstraints.parametersHandled !== 'boolean') {
-      anonymizedConstraints.parametersHandled = false;
-    }
 
     const deanonymizedConstraints = deanonymizeConstraints(anonymizedConstraints, pseudoToReal);
 
@@ -139,7 +132,6 @@ Return only the JSON object, no additional text.`;
     console.warn('LLM constraint extraction failed, using empty constraints:', error.message);
     return {
       constraints: {
-        parametersHandled: false,
         hardConstraints: { conditionalCapacity: [], forbiddenPairs: [], requiredPairs: [] },
         capacityOverrides: [],
         softConstraints: [],

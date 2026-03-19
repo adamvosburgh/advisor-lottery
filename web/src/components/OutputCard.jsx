@@ -63,7 +63,7 @@ function generateComparisonText(option, allOptions) {
   return `${sentence1} ${sentence2}`;
 }
 
-function OutputCard({ option, allOptions, mode = 'studio', hasParameters = false }) {
+function OutputCard({ option, allOptions, mode = 'studio' }) {
   const { summary } = option;
 
   const isStudio = mode === 'studio';
@@ -136,18 +136,6 @@ function OutputCard({ option, allOptions, mode = 'studio', hasParameters = false
           <div className={`constraint-check ${allAssignedOnce ? 'constraint-check--ok' : 'constraint-check--fail'}`}>
             All students assigned once: {allAssignedOnce ? '✓' : '✗'}
           </div>
-          {hasParameters && (
-            <div className={`constraint-check ${
-              summary.parametersStatus === 'satisfied' ? 'constraint-check--ok' :
-              summary.parametersStatus === 'violated' ? 'constraint-check--fail' :
-              'constraint-check--warn'
-            }`}>
-              Additional parameters:{' '}
-              {summary.parametersStatus === 'satisfied' ? '✓' :
-               summary.parametersStatus === 'violated' ? '✗' :
-               '⚠ not enforceable'}
-            </div>
-          )}
         </div>
 
         <div className="output-card__description">{description}</div>
