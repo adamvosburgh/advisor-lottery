@@ -184,25 +184,27 @@ body::before {
   color: var(--text-color);
   cursor: pointer;
   transition: all 0.15s ease;
-  box-shadow: var(--input-shadow);
+  box-shadow: none;
 }
 
 .speed-button:hover:not(:disabled) {
   border-color: var(--accent-blue);
-  background: rgba(62, 108, 179, 0.08);
+  background: var(--input-bg);
   color: var(--accent-blue);
   transform: translateY(-1px);
 }
 
 .speed-button--active {
-  border-color: var(--accent-blue);
-  background: linear-gradient(120deg, var(--accent-blue), var(--accent-blue-dark));
-  color: #fff;
-  box-shadow: 0 8px 20px rgba(33, 58, 95, 0.25);
+  border-color: var(--accent-blue-dark);
+  border-width: 2.5px;
+  background: var(--input-bg);
+  color: var(--accent-blue-dark);
+  font-weight: 700;
+  box-shadow: none;
 }
 
 .speed-button--active:hover:not(:disabled) {
-  background: linear-gradient(120deg, var(--accent-blue-dark), var(--accent-blue));
+  background: var(--input-bg);
   border-color: var(--accent-blue-dark);
 }
 
@@ -232,18 +234,21 @@ body::before {
 }
 
 .primary-button {
-  background: linear-gradient(120deg, var(--accent-blue), var(--accent-blue-dark));
-  color: #fff;
-  box-shadow: 0 20px 40px rgba(33, 58, 95, 0.25);
+  background: var(--input-bg);
+  border: 2.5px solid var(--accent-blue-dark);
+  color: var(--accent-blue-dark);
+  box-shadow: none;
 }
 
 .primary-button:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 24px 48px rgba(33, 58, 95, 0.3);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+  box-shadow: 0 8px 24px rgba(33, 58, 95, 0.15);
 }
 
 .primary-button:disabled {
-  opacity: 0.6;
+  opacity: 0.4;
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -568,7 +573,7 @@ body::before {
 }
 
 .splash-button {
-  border: none;
+  border: 2.5px solid var(--accent-blue-dark);
   border-radius: var(--radius-pill);
   padding: 18px 48px;
   font-family: inherit;
@@ -576,15 +581,17 @@ body::before {
   letter-spacing: 0.15em;
   text-transform: uppercase;
   cursor: pointer;
-  background: linear-gradient(120deg, var(--accent-blue), var(--accent-blue-dark));
-  color: #fff;
-  box-shadow: 0 20px 40px rgba(33, 58, 95, 0.25);
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  background: var(--input-bg);
+  color: var(--accent-blue-dark);
+  box-shadow: none;
+  transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
 .splash-button:hover {
   transform: translateY(-2px);
-  box-shadow: 0 24px 48px rgba(33, 58, 95, 0.3);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+  box-shadow: 0 8px 24px rgba(33, 58, 95, 0.15);
 }
 
 @media (max-width: 720px) {
@@ -636,25 +643,27 @@ body::before {
   color: var(--text-color);
   cursor: pointer;
   transition: all 0.15s ease;
-  box-shadow: var(--input-shadow);
+  box-shadow: none;
 }
 
 .mode-button:hover:not(:disabled) {
   border-color: var(--accent-blue);
-  background: rgba(62, 108, 179, 0.08);
+  background: var(--input-bg);
   color: var(--accent-blue);
   transform: translateY(-1px);
 }
 
 .mode-button--active {
-  border-color: var(--accent-blue);
-  background: linear-gradient(120deg, var(--accent-blue), var(--accent-blue-dark));
-  color: #fff;
-  box-shadow: 0 8px 20px rgba(33, 58, 95, 0.25);
+  border-color: var(--accent-blue-dark);
+  border-width: 2.5px;
+  background: var(--input-bg);
+  color: var(--accent-blue-dark);
+  font-weight: 700;
+  box-shadow: none;
 }
 
 .mode-button--active:hover:not(:disabled) {
-  background: linear-gradient(120deg, var(--accent-blue-dark), var(--accent-blue));
+  background: var(--input-bg);
   border-color: var(--accent-blue-dark);
 }
 

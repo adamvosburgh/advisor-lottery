@@ -269,12 +269,12 @@ function App() {
     if (provider === 'ollama') {
       return {
         label: 'Slow',
-        description: 'Uses a lightweight (Qwen3-8B) LLM on Adam\'s home server. Will take approx 10min. Low energy + Free.'
+        description: 'Uses a lightweight LLM (Qwen3-8B) on Adam\'s home server. Will take approx 10min. Low energy + Free.'
       };
     }
     return {
       label: 'Fast',
-      description: 'Uses a midweight (Qwen2.5-72B) via HuggingFace API. Will take approx 10 seconds. Mid energy + $0.01 billed to Adam.'
+      description: 'Uses a midweight LLM (Qwen2.5-72B) via HuggingFace API. Will take approx 10-20 seconds. Mid energy + $0.01 billed to Adam.'
     };
   }, [provider]);
 
