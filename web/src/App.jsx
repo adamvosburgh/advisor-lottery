@@ -487,7 +487,7 @@ function App() {
             <h2 className="results-block__heading">Generated Option Descriptions</h2>
             <div className="output-grid">
               {results.options.map((option) => (
-                <OutputCard key={option.id} option={option} mode={mode} />
+                <OutputCard key={option.id} option={option} allOptions={results.options} mode={mode} />
               ))}
             </div>
           </div>

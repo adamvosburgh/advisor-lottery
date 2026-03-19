@@ -146,7 +146,7 @@ function saveSummaryTxt(lotterySlug, finalOptions, mode) {
         ? `${(s.percentFirstChoice * 100).toFixed(1)}%`
         : '—';
     const lowest = typeof s.lowestPlacement === 'number' ? s.lowestPlacement : '—';
-    const description = generateDescription(option);
+    const description = generateDescription(option, finalOptions);
     const sizeLines = s.studioSizes
       ? Object.entries(s.studioSizes)
           .sort(([a], [b]) => a.localeCompare(b))

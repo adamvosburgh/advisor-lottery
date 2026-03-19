@@ -53,7 +53,7 @@ function buildSummarySheet(worksheet, finalOptions, mode) {
   // Description row — long text, wrap enabled
   const descRow = worksheet.addRow([
     'Description',
-    ...finalOptions.map((o) => generateDescription(o))
+    ...finalOptions.map((o) => generateDescription(o, finalOptions))
   ]);
   descRow.getCell(1).font = { bold: true };
   for (let col = 2; col <= 4; col++) {

@@ -5,18 +5,49 @@ const ALGORITHM_DESCRIPTIONS = {
   3: 'This algorithm minimizes overall dissatisfaction across the whole group. The student with the fewest good options gets placed first into their best available studio, repeating until everyone is assigned, then pairs of students are swapped wherever a trade would reduce total dissatisfaction.'
 };
 
-function generateComparisonText(option) {
-  const s = option.summary;
-  const avg = typeof s.averagePlacement === 'number' ? s.averagePlacement.toFixed(2) : '—';
-  const pct =
-    typeof s.percentFirstChoice === 'number'
-      ? `${(s.percentFirstChoice * 100).toFixed(1)}%`
-      : '—';
-  const lowest = typeof s.lowestPlacement === 'number' ? s.lowestPlacement : '—';
-  return `Average placement: ${avg}, first-choice rate: ${pct}, worst-case placement: rank ${lowest}.`;
+function generateComparisonText(option, allOptions) {
+  if (!allOptions || allOptions.length < 3) return '';
+
+  const metrics = allOptions.map((o) => ({
+    id: o.id,
+    avg: o.summary.averagePlacement,
+    fc: o.summary.percentFirstChoice,
+    lp: o.summary.lowestPlacement
+  }));
+
+  const me = metrics.find((m) => m.id === option.id);
+  if (!me) return '';
+  const others = metrics.filter((m) => m.id !== option.id);
+
+  const bestAvg = me.avg <= Math.min(...others.map((o) => o.avg));
+  const worstAvg = me.avg >= Math.max(...others.map((o) => o.avg));
+  const bestFC = me.fc >= Math.max(...others.map((o) => o.fc));
+  const worstFC = me.fc <= Math.min(...others.map((o) => o.fc));
+  const bestLP = me.lp <= Math.min(...others.map((o) => o.lp));
+  const worstLP = me.lp >= Math.max(...others.map((o) => o.lp));
+
+  const strengths = [];
+  const weaknesses = [];
+  if (bestFC) strengths.push('highest first-choice rate');
+  if (bestAvg) strengths.push('best average placement');
+  if (bestLP) strengths.push('best worst-case placement');
+  if (worstFC) weaknesses.push('lowest first-choice rate');
+  if (worstAvg) weaknesses.push('highest average placement');
+  if (worstLP) weaknesses.push('highest worst-case placement');
+
+  if (strengths.length > 0 && weaknesses.length > 0) {
+    return `This output has the ${strengths.join(' and ')} but the ${weaknesses.join(' and ')}.`;
+  }
+  if (strengths.length > 0) {
+    return `This output has the ${strengths.join(' and ')} with no notable tradeoffs.`;
+  }
+  if (weaknesses.length > 0) {
+    return `This output has no standout strengths but the ${weaknesses.join(' and ')}.`;
+  }
+  return 'This output sits in the middle ground across all three metrics.';
 }
 
-function OutputCard({ option, mode = 'studio' }) {
+function OutputCard({ option, allOptions, mode = 'studio' }) {
   const { summary } = option;
 
   const isStudio = mode === 'studio';
@@ -50,7 +81,7 @@ function OutputCard({ option, mode = 'studio' }) {
 
   // 4-sentence description
   const staticDesc = ALGORITHM_DESCRIPTIONS[option.id] || summary.notes || '';
-  const comparisonDesc = generateComparisonText(option);
+  const comparisonDesc = generateComparisonText(option, allOptions);
   const description = comparisonDesc ? `${staticDesc} ${comparisonDesc}` : staticDesc;
 
   return (
