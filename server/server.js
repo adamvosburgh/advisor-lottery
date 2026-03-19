@@ -250,12 +250,6 @@ async function handleLottery(requestData, lotterySlug, mode) {
     return option;
   };
 
-  const reRunWithAdjustedAdvisors = (optionId, adjustedAdvisors) => {
-    const runner = algorithms.find((a) => a.id === optionId)?.runner;
-    if (!runner) return null;
-    return runner(requestData.students, adjustedAdvisors, requestData.parameters, mode);
-  };
-
   // STEP 1–3: Run algorithms
   const finalOptions = [];
   const labels = [
@@ -269,95 +263,30 @@ async function handleLottery(requestData, lotterySlug, mode) {
     finalOptions.push(runAlgorithmWithRetry(algorithms[i].runner));
   }
 
-  // STEP 4: LLM Validation of all three options
+  // STEP 4: Deterministic validation of all three options
   // eslint-disable-next-line no-console
-  console.log('  [4/4] Validating assignments with LLM...');
-  const validationLLMPayloads = [];
+  console.log('  [4/4] Validating assignments...');
 
   for (let i = 0; i < finalOptions.length; i += 1) {
     const option = finalOptions[i];
-    const validationResult = await validateAssignments(
-      requestData.advisors,
+    const validation = validateAssignments(
+      advisorsWithOverrides,
       requestData.students,
-      requestData.parameters,
       option.assignments,
-      extractedConstraints,
-      realToPseudo,
-      pseudoToReal,
-      mode
+      extractedConstraints
     );
 
-    const validation = validationResult.validation;
-    validationLLMPayloads.push({
-      optionId: option.id,
-      payload: validationResult.llmPayload
-    });
+    finalOptions[i].validation = validation;
 
-    finalOptions[i].validation = {
-      warnings: validation.warnings || [],
-      commentary: validation.commentary || []
-    };
-
-    if (!validation.isValid && validation.violations.length > 0) {
+    if (!validation.isValid) {
       // eslint-disable-next-line no-console
       console.log(`    Option ${option.id} has violations:`, validation.violations);
-
-      const violatedAdvisors = validation.violations
-        .filter((v) => v.type === 'forbidden_pair' || v.type === 'required_pair')
-        .map((v) => v.advisorName)
-        .filter(Boolean);
-
-      if (violatedAdvisors.length > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`    Retrying Option ${option.id} with adjusted constraints...`);
-
-        const adjustedAdvisors = advisorsWithOverrides.map((advisor) => {
-          if (violatedAdvisors.includes(advisor.name)) {
-            return { ...advisor, capacity: 0 };
-          }
-          return advisor;
-        });
-
-        const retriedOption = reRunWithAdjustedAdvisors(option.id, adjustedAdvisors);
-
-        if (retriedOption) {
-          finalOptions[i] = retriedOption;
-
-          const revalidationResult = await validateAssignments(
-            requestData.advisors,
-            requestData.students,
-            requestData.parameters,
-            finalOptions[i].assignments,
-            extractedConstraints,
-            realToPseudo,
-            pseudoToReal,
-            mode
-          );
-
-          const revalidation = revalidationResult.validation;
-          validationLLMPayloads[i] = {
-            optionId: option.id,
-            payload: revalidationResult.llmPayload,
-            retried: true
-          };
-
-          finalOptions[i].validation = {
-            warnings: revalidation.warnings || [],
-            commentary: revalidation.commentary || []
-          };
-        }
-      }
-    }
-
-    if (validation.warnings && validation.warnings.length > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`    Option ${option.id} has ${validation.warnings.length} warning(s)`);
     }
   }
 
   const promptLog = {
     timestamp: new Date().toISOString(),
-    approach: 'Three Deterministic Algorithms with LLM Constraint Extraction & Validation',
+    approach: 'Three Deterministic Algorithms with LLM Constraint Extraction & Deterministic Validation',
     extractedConstraints,
     capacityOverridesApplied: extractedConstraints.capacityOverrides || [],
     option1_stats: finalOptions[0].summary,
@@ -382,8 +311,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
         .filter(([name]) => requestData.students.some((s) => s.name === name))
         .map(([real, pseudo]) => ({ real, pseudo }))
     },
-    constraintExtraction: extractionLLMPayload,
-    validations: validationLLMPayloads
+    constraintExtraction: extractionLLMPayload
   };
 
   const outputWritePromises = finalOptions.map((option) =>

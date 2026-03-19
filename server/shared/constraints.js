@@ -1,5 +1,5 @@
 /**
- * LLM-powered constraint extraction and assignment validation.
+ * LLM-powered constraint extraction and deterministic assignment validation.
  * Shared by both studio and advisor modes via the `mode` parameter.
  */
 
@@ -143,127 +143,109 @@ Return only the JSON object, no additional text.`;
 }
 
 /**
- * Validate algorithm outputs using LLM.
- * Returns violations (hard), warnings (soft), and commentary (optimization goals).
+ * Deterministic validation of algorithm outputs against extracted constraints.
+ * Checks: max capacity, min capacity (notes + overrides), conditional capacity,
+ * and that every student is assigned exactly once.
+ *
+ * @param {Array} advisors - Advisor data (with capacity, minCapacity, notes)
+ * @param {Array} students - Student data
+ * @param {Array} assignments - Array of {advisor, student} pairs
+ * @param {Object} extractedConstraints - From extractConstraints()
+ * @returns {{ isValid: boolean, violations: Array }}
  */
-async function validateAssignments(advisors, students, parameters, assignments, extractedConstraints, realToPseudo, pseudoToReal, mode = 'advisor') {
-  const terminology = mode === 'studio' ? 'studio' : 'advisor';
-  const terminologyPlural = mode === 'studio' ? 'studios' : 'advisors';
+function validateAssignments(advisors, students, assignments, extractedConstraints) {
+  const violations = [];
 
-  const systemPrompt = `You are an assignment validator. Evaluate assignments against constraints and preferences.
+  // Build assignment counts per advisor
+  const countByAdvisor = new Map();
+  const assignedStudents = new Set();
+  const duplicateStudents = [];
 
-Review THREE categories:
-
-1. HARD CONSTRAINTS (violations block the solution):
-   - Conditional capacity: ${terminology} must have specific student counts (ONLY check constraints from EXTRACTED CONSTRAINTS)
-   - Forbidden pairs: specific ${terminology}-student pairs that cannot be matched
-   - Required pairs: specific ${terminology}-student pairs that must be matched
-   - Capacity limits: ${terminologyPlural} cannot exceed their maximum capacity
-
-IMPORTANT: Do NOT report violations for minimum/maximum capacity constraints in notes.
-The backend algorithms automatically enforce capacity constraints. Only check the conditional capacity constraints from EXTRACTED CONSTRAINTS.
-
-2. SOFT CONSTRAINTS (warnings don't block, but inform the user):
-   - Preferences not met
-   - Priorities not followed
-   - Balance goals not achieved
-
-3. OPTIMIZATION GOALS (commentary helps user choose):
-   - How well did this option achieve stated goals?
-   - Neutral, factual assessment to help user compare options
-
-Return a JSON object:
-{
-  "isValid": boolean (false only if hard constraints violated),
-  "userFacingSummary": "2-3 sentence plain-language explanation of this option's results.",
-  "violations": [
-    {"type": "conditional_capacity" | "forbidden_pair" | "required_pair" | "capacity_exceeded", "advisorName": "string", "studentName": "string (if applicable)", "message": "clear explanation"}
-  ],
-  "warnings": [
-    {"type": "preference" | "priority" | "balance", "severity": "low" | "medium" | "high", "message": "clear explanation of what wasn't satisfied"}
-  ],
-  "commentary": [
-    {"goal": "string (the optimization goal)", "assessment": "factual evaluation of how well this option achieved the goal", "metrics": {"key": "value"}}
-  ]
-}`;
-
-  const {
-    anonymizeAdvisors,
-    anonymizeAssignments,
-    anonymizeConstraints,
-    anonymizeText,
-    deanonymizeValidation
-  } = require('./anonymize');
-
-  const anonymizedAdvisors = anonymizeAdvisors(advisors, realToPseudo);
-  const anonymizedAssignments = anonymizeAssignments(assignments, realToPseudo);
-  const anonymizedParameters = anonymizeText(parameters, realToPseudo);
-  const anonymizedConstraints = anonymizeConstraints(extractedConstraints, realToPseudo);
-
-  const assignmentsByAdvisor = new Map();
-  anonymizedAssignments.forEach((assignment) => {
-    if (!assignmentsByAdvisor.has(assignment.advisor)) {
-      assignmentsByAdvisor.set(assignment.advisor, []);
+  for (const a of assignments) {
+    countByAdvisor.set(a.advisor, (countByAdvisor.get(a.advisor) || 0) + 1);
+    if (assignedStudents.has(a.student)) {
+      duplicateStudents.push(a.student);
     }
-    assignmentsByAdvisor.get(assignment.advisor).push(assignment.student);
-  });
-
-  const assignmentSummary = anonymizedAdvisors
-    .map((advisor) => {
-      const assigned = assignmentsByAdvisor.get(advisor.name) || [];
-      return `${advisor.name} (capacity ${advisor.capacity}): ${assigned.length} students [${assigned.join(', ')}]`;
-    })
-    .join('\n');
-
-  const userPrompt = `Validate these assignments against all extracted constraints and goals:
-
-EXTRACTED CONSTRAINTS & GOALS:
-${JSON.stringify(anonymizedConstraints, null, 2)}
-
-ASSIGNMENTS:
-${assignmentSummary}
-
-${terminologyPlural.toUpperCase()} NOTES AND PARAMETERS (for reference):
-${anonymizedAdvisors.map((a) => `${a.name}: ${a.notes || 'none'}`).join('\n')}
-Parameters: ${anonymizedParameters || 'none'}
-
-Provide violations (hard), warnings (soft), and commentary (goals).
-Return only the JSON object, no additional text.`;
-
-  try {
-    const response = await callModel(systemPrompt, userPrompt, 0);
-    const cleaned = response.trim().replace(/```(?:json)?\s*/gi, '').replace(/```\s*$/g, '');
-
-    let anonymizedValidation;
-    try {
-      anonymizedValidation = JSON.parse(cleaned);
-    } catch (parseError) {
-      console.error('Failed to parse LLM validation response as JSON:', parseError.message);
-      console.error('Raw response (first 500 chars):', cleaned.substring(0, 500));
-      throw new Error(`LLM returned invalid JSON: ${parseError.message}`);
-    }
-
-    const deanonymizedValidation = deanonymizeValidation(anonymizedValidation, pseudoToReal);
-
-    return {
-      validation: deanonymizedValidation,
-      llmPayload: {
-        mode,
-        systemPrompt,
-        userPrompt,
-        anonymizedAdvisors,
-        anonymizedAssignments,
-        anonymizedConstraints,
-        anonymizedParameters
-      }
-    };
-  } catch (error) {
-    console.warn('LLM validation failed, assuming valid:', error.message);
-    return {
-      validation: { isValid: true, violations: [], warnings: [], commentary: [] },
-      llmPayload: null
-    };
+    assignedStudents.add(a.student);
   }
+
+  // Check every student assigned exactly once
+  const allStudentNames = students.map((s) => s.name);
+  const unassigned = allStudentNames.filter((s) => !assignedStudents.has(s));
+  if (unassigned.length > 0) {
+    violations.push({
+      type: 'unassigned_students',
+      message: `${unassigned.length} student(s) not assigned: ${unassigned.join(', ')}`
+    });
+  }
+  if (duplicateStudents.length > 0) {
+    violations.push({
+      type: 'duplicate_assignment',
+      message: `${duplicateStudents.length} student(s) assigned more than once: ${duplicateStudents.join(', ')}`
+    });
+  }
+
+  // Check capacity constraints per advisor
+  for (const advisor of advisors) {
+    const count = countByAdvisor.get(advisor.name) || 0;
+
+    // Max capacity
+    if (count > advisor.capacity) {
+      violations.push({
+        type: 'capacity_exceeded',
+        advisorName: advisor.name,
+        message: `${advisor.name} has ${count} students but max capacity is ${advisor.capacity}`
+      });
+    }
+
+    // Min capacity (from notes/backend-parsed minCapacity)
+    const minCap = advisor.minCapacity != null ? advisor.minCapacity : null;
+    if (minCap != null && count < minCap && count > 0) {
+      violations.push({
+        type: 'below_minimum',
+        advisorName: advisor.name,
+        message: `${advisor.name} has ${count} students but minimum is ${minCap}`
+      });
+    }
+  }
+
+  // Check capacity overrides from extracted constraints
+  const overrides = extractedConstraints.capacityOverrides || [];
+  for (const override of overrides) {
+    const count = countByAdvisor.get(override.name) || 0;
+    if (override.minCapacity != null && count < override.minCapacity && count > 0) {
+      violations.push({
+        type: 'override_below_minimum',
+        advisorName: override.name,
+        message: `${override.name} has ${count} students but override minimum is ${override.minCapacity}`
+      });
+    }
+    if (override.maxCapacity != null && count > override.maxCapacity) {
+      violations.push({
+        type: 'override_above_maximum',
+        advisorName: override.name,
+        message: `${override.name} has ${count} students but override maximum is ${override.maxCapacity}`
+      });
+    }
+  }
+
+  // Check conditional capacity (allowedCounts)
+  const conditionalCaps = extractedConstraints.hardConstraints?.conditionalCapacity || [];
+  for (const cc of conditionalCaps) {
+    const count = countByAdvisor.get(cc.advisorName) || 0;
+    if (!cc.allowedCounts.includes(count)) {
+      violations.push({
+        type: 'conditional_capacity',
+        advisorName: cc.advisorName,
+        message: `${cc.advisorName} has ${count} students but allowed counts are [${cc.allowedCounts.join(', ')}]`
+      });
+    }
+  }
+
+  return {
+    isValid: violations.length === 0,
+    violations
+  };
 }
 
 module.exports = {
