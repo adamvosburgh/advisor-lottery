@@ -877,6 +877,5 @@ module.exports = {
   runDeferredAcceptance,
   runMinimumRegretAlgorithm,
   validateConstraints,
-  adjustAdvisorsForRetry,
-  calculateSummaryStats
+  adjustAdvisorsForRetry
 };

@@ -39,6 +39,5 @@ async function saveOptionCSVs(lotterySlug, options, mode = 'advisor') {
 }
 
 module.exports = {
-  assignmentsToRows,
   saveOptionCSVs
 };

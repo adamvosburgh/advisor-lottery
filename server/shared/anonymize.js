@@ -67,7 +67,7 @@ function anonymizeText(text, realToPseudo) {
 }
 
 /**
- * Anonymize advisor list for LLM
+ * Anonymize advisor/studio list for LLM
  */
 function anonymizeAdvisors(advisors, realToPseudo) {
   return advisors.map((advisor) => ({
@@ -78,93 +78,22 @@ function anonymizeAdvisors(advisors, realToPseudo) {
 }
 
 /**
- * Anonymize student list for LLM
+ * Replace all occurrences of pseudonyms with real names in a string
  */
-function anonymizeStudents(students, realToPseudo) {
-  return students.map((student) => ({
-    name: realToPseudo.get(student.name),
-    preferences: student.preferences.map((pref) => realToPseudo.get(pref) || pref)
-  }));
-}
+function deanonymizeText(text, pseudoToReal) {
+  if (!text) return text;
 
-/**
- * Anonymize assignments for LLM validation
- */
-function anonymizeAssignments(assignments, realToPseudo) {
-  return assignments.map((assignment) => ({
-    student: realToPseudo.get(assignment.student) || assignment.student,
-    advisor: realToPseudo.get(assignment.advisor) || assignment.advisor,
-    rank: assignment.rank
-  }));
-}
+  let deanonymized = text;
 
-/**
- * Anonymize constraint extraction results (for re-sending to LLM)
- * Includes capacityOverrides introduced for per-entity capacity bug fix.
- */
-function anonymizeConstraints(constraints, realToPseudo) {
-  if (!constraints) return constraints;
+  const pseudonyms = Array.from(pseudoToReal.keys()).sort((a, b) => b.length - a.length);
 
-  const result = {
-    hardConstraints: {
-      conditionalCapacity: [],
-      forbiddenPairs: [],
-      requiredPairs: []
-    },
-    capacityOverrides: [],
-    softConstraints: [],
-    optimizationGoals: []
-  };
+  pseudonyms.forEach((pseudo) => {
+    const realName = pseudoToReal.get(pseudo);
+    const regex = new RegExp(`\\b${pseudo}\\b`, 'g');
+    deanonymized = deanonymized.replace(regex, realName);
+  });
 
-  if (constraints.hardConstraints) {
-    result.hardConstraints.conditionalCapacity = (
-      constraints.hardConstraints.conditionalCapacity || []
-    ).map((c) => ({
-      ...c,
-      advisorName: realToPseudo.get(c.advisorName) || c.advisorName,
-      rawText: anonymizeText(c.rawText, realToPseudo)
-    }));
-
-    result.hardConstraints.forbiddenPairs = (constraints.hardConstraints.forbiddenPairs || []).map(
-      (c) => ({
-        ...c,
-        advisorName: realToPseudo.get(c.advisorName) || c.advisorName,
-        studentName: realToPseudo.get(c.studentName) || c.studentName,
-        rawText: anonymizeText(c.rawText, realToPseudo)
-      })
-    );
-
-    result.hardConstraints.requiredPairs = (constraints.hardConstraints.requiredPairs || []).map(
-      (c) => ({
-        ...c,
-        advisorName: realToPseudo.get(c.advisorName) || c.advisorName,
-        studentName: realToPseudo.get(c.studentName) || c.studentName,
-        rawText: anonymizeText(c.rawText, realToPseudo)
-      })
-    );
-  }
-
-  // Anonymize per-entity capacity overrides
-  result.capacityOverrides = (constraints.capacityOverrides || []).map((c) => ({
-    ...c,
-    name: realToPseudo.get(c.name) || c.name,
-    rawText: anonymizeText(c.rawText, realToPseudo)
-  }));
-
-  result.softConstraints = (constraints.softConstraints || []).map((c) => ({
-    ...c,
-    target: realToPseudo.get(c.target) || c.target,
-    rawText: anonymizeText(c.rawText, realToPseudo),
-    description: anonymizeText(c.description, realToPseudo)
-  }));
-
-  result.optimizationGoals = (constraints.optimizationGoals || []).map((c) => ({
-    ...c,
-    rawText: anonymizeText(c.rawText, realToPseudo),
-    description: anonymizeText(c.description, realToPseudo)
-  }));
-
-  return result;
+  return deanonymized;
 }
 
 /**
@@ -235,60 +164,9 @@ function deanonymizeConstraints(constraints, pseudoToReal) {
   return result;
 }
 
-/**
- * De-anonymize validation results
- */
-function deanonymizeValidation(validation, pseudoToReal) {
-  if (!validation) return validation;
-
-  return {
-    isValid: validation.isValid,
-    userFacingSummary: deanonymizeText(validation.userFacingSummary, pseudoToReal),
-    violations: (validation.violations || []).map((v) => ({
-      ...v,
-      advisorName: pseudoToReal.get(v.advisorName) || v.advisorName,
-      studentName: pseudoToReal.get(v.studentName) || v.studentName,
-      message: deanonymizeText(v.message, pseudoToReal)
-    })),
-    warnings: (validation.warnings || []).map((w) => ({
-      ...w,
-      message: deanonymizeText(w.message, pseudoToReal)
-    })),
-    commentary: (validation.commentary || []).map((c) => ({
-      ...c,
-      goal: deanonymizeText(c.goal, pseudoToReal),
-      assessment: deanonymizeText(c.assessment, pseudoToReal)
-    }))
-  };
-}
-
-/**
- * Replace all occurrences of pseudonyms with real names in a string
- */
-function deanonymizeText(text, pseudoToReal) {
-  if (!text) return text;
-
-  let deanonymized = text;
-
-  const pseudonyms = Array.from(pseudoToReal.keys()).sort((a, b) => b.length - a.length);
-
-  pseudonyms.forEach((pseudo) => {
-    const realName = pseudoToReal.get(pseudo);
-    const regex = new RegExp(`\\b${pseudo}\\b`, 'g');
-    deanonymized = deanonymized.replace(regex, realName);
-  });
-
-  return deanonymized;
-}
-
 module.exports = {
   createNameMapping,
   anonymizeAdvisors,
-  anonymizeStudents,
-  anonymizeAssignments,
-  anonymizeConstraints,
   anonymizeText,
-  deanonymizeConstraints,
-  deanonymizeValidation,
-  deanonymizeText
+  deanonymizeConstraints
 };
