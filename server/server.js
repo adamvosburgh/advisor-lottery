@@ -38,6 +38,7 @@ const { saveOptionCSVs } = require('./shared/csv');
 const { saveStudioXLSX } = require('./studio/xlsx');
 const { saveAdvisorXLSX } = require('./advisor/xlsx');
 const { createNameMapping } = require('./shared/anonymize');
+const { generateDescription } = require('./shared/descriptions');
 const {
   normalizeKey,
   runWaterFillingAlgorithm,
@@ -145,16 +146,19 @@ function saveSummaryTxt(lotterySlug, finalOptions, mode) {
         ? `${(s.percentFirstChoice * 100).toFixed(1)}%`
         : '—';
     const lowest = typeof s.lowestPlacement === 'number' ? s.lowestPlacement : '—';
-    const sizes = s.studioSizes
+    const description = generateDescription(option);
+    const sizeLines = s.studioSizes
       ? Object.entries(s.studioSizes)
+          .sort(([a], [b]) => a.localeCompare(b))
           .map(([n, c]) => `${n}: ${c}`)
-          .join(', ')
-      : '—';
+      : ['—'];
     lines.push(`OUTPUT ${option.id} — ${s.algorithm}`);
     lines.push(`Average Placement: ${avg}`);
     lines.push(`% First Choice: ${pct}`);
     lines.push(`Lowest Placement: ${lowest}`);
-    lines.push(`${sizeLabel}: ${sizes}`);
+    lines.push(`Description: ${description}`);
+    lines.push(`${sizeLabel}:`);
+    for (const sz of sizeLines) lines.push(sz);
     lines.push('');
   }
   fs.writeFileSync(
