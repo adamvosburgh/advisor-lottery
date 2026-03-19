@@ -1,6 +1,7 @@
 const ExcelJS = require('exceljs');
 const path = require('path');
 const { OUTPUT_DIR } = require('../shared/fileio');
+const { buildSummarySheet } = require('../shared/xlsx-summary');
 
 // Color palette — one per advisor column position (ARGB format for exceljs)
 const ADVISOR_COLORS = [
@@ -85,6 +86,9 @@ function buildAdvisorSheet(worksheet, students, advisors, assignments) {
  */
 async function saveAdvisorXLSX(lotterySlug, students, advisors, finalOptions) {
   const workbook = new ExcelJS.Workbook();
+
+  const summarySheet = workbook.addWorksheet('Summary');
+  buildSummarySheet(summarySheet, finalOptions, 'advisor');
 
   for (const option of finalOptions) {
     const sheet = workbook.addWorksheet(`Option ${option.id}`);

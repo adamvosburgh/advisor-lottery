@@ -134,6 +134,35 @@ function applyCapacityOverrides(advisors, overrides) {
   });
 }
 
+function saveSummaryTxt(lotterySlug, finalOptions, mode) {
+  const sizeLabel = mode === 'studio' ? 'Studio Sizes' : 'Advisor Load';
+  const lines = [];
+  for (const option of finalOptions) {
+    const s = option.summary;
+    const avg = typeof s.averagePlacement === 'number' ? s.averagePlacement.toFixed(2) : '—';
+    const pct =
+      typeof s.percentFirstChoice === 'number'
+        ? `${(s.percentFirstChoice * 100).toFixed(1)}%`
+        : '—';
+    const lowest = typeof s.lowestPlacement === 'number' ? s.lowestPlacement : '—';
+    const sizes = s.studioSizes
+      ? Object.entries(s.studioSizes)
+          .map(([n, c]) => `${n}: ${c}`)
+          .join(', ')
+      : '—';
+    lines.push(`OUTPUT ${option.id} — ${s.algorithm}`);
+    lines.push(`Average Placement: ${avg}`);
+    lines.push(`% First Choice: ${pct}`);
+    lines.push(`Lowest Placement: ${lowest}`);
+    lines.push(`${sizeLabel}: ${sizes}`);
+    lines.push('');
+  }
+  fs.writeFileSync(
+    path.join(OUTPUT_DIR, `${lotterySlug}_summary.txt`),
+    lines.join('\n')
+  );
+}
+
 async function runJob(jobId, requestData, lotterySlug, mode) {
   jobs.set(jobId, { status: 'running' });
   try {
@@ -370,6 +399,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
     );
   }
 
+  saveSummaryTxt(lotterySlug, finalOptions, mode);
   await Promise.all(outputWritePromises);
 
   // eslint-disable-next-line no-console
@@ -506,10 +536,16 @@ app.get('/api/zip/:slug', (req, res) => {
     return res.status(400).json({ error: 'Invalid slug.' });
   }
 
-  const files = [1, 2, 3].map((i) => ({
-    diskPath: path.join(OUTPUT_DIR, `${slug}_output${i}.csv`),
-    archiveName: `${slug}_output${i}.csv`
-  }));
+  const files = [
+    ...([1, 2, 3].map((i) => ({
+      diskPath: path.join(OUTPUT_DIR, `${slug}_output${i}.csv`),
+      archiveName: `${slug}_output${i}.csv`
+    }))),
+    {
+      diskPath: path.join(OUTPUT_DIR, `${slug}_summary.txt`),
+      archiveName: `${slug}_summary.txt`
+    }
+  ];
 
   const existing = files.filter((f) => fs.existsSync(f.diskPath));
   if (existing.length === 0) {

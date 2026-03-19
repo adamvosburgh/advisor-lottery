@@ -1,6 +1,7 @@
 const ExcelJS = require('exceljs');
 const path = require('path');
 const { OUTPUT_DIR } = require('../shared/fileio');
+const { buildSummarySheet } = require('../shared/xlsx-summary');
 
 // Color palette — one per studio column position (ARGB format for exceljs)
 const STUDIO_COLORS = [
@@ -85,6 +86,9 @@ function buildSheet(worksheet, students, assignments) {
  */
 async function saveStudioXLSX(lotterySlug, students, finalOptions) {
   const workbook = new ExcelJS.Workbook();
+
+  const summarySheet = workbook.addWorksheet('Summary');
+  buildSummarySheet(summarySheet, finalOptions, 'studio');
 
   for (const option of finalOptions) {
     const sheet = workbook.addWorksheet(`Option ${option.id}`);
