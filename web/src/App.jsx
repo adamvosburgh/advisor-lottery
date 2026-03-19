@@ -269,12 +269,12 @@ function App() {
     if (provider === 'ollama') {
       return {
         label: 'Slow',
-        description: 'Uses a lightweight (llama 3.1:8B) LLM on Adam\'s home server. Will take approx 10min. Low energy + Free, but struggles with complex lotteries (like adv v + vi)'
+        description: 'Uses a lightweight (Qwen3-8B) LLM on Adam\'s home server. Will take approx 10min. Low energy + Free.'
       };
     }
     return {
       label: 'Fast',
-      description: 'Uses Qwen2.5-72B via HuggingFace API. Will take approx 10 seconds. Mid energy + $0.01 billed to Adam.'
+      description: 'Uses a midweight (Qwen2.5-72B) via HuggingFace API. Will take approx 10 seconds. Mid energy + $0.01 billed to Adam.'
     };
   }, [provider]);
 
@@ -410,7 +410,7 @@ function App() {
           label="Additional parameters (optional)"
           value={parameters}
           onChange={setParameters}
-          placeholder="Additional constraints, priorities, notes for the solver to incorporate"
+          placeholder="Additional constraints for the solver to incorporate. E.g. 'Studio x can have a minimum of 6 students.' Not all constraints will work, and in that case they will be noted in the output."
           multiline
         />
       </div>
@@ -487,7 +487,7 @@ function App() {
             <h2 className="results-block__heading">Generated Option Descriptions</h2>
             <div className="output-grid">
               {results.options.map((option) => (
-                <OutputCard key={option.id} option={option} allOptions={results.options} mode={mode} />
+                <OutputCard key={option.id} option={option} allOptions={results.options} mode={mode} hasParameters={results.hasParameters} />
               ))}
             </div>
           </div>

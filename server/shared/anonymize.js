@@ -106,6 +106,7 @@ function anonymizeConstraints(constraints, realToPseudo) {
   if (!constraints) return constraints;
 
   const result = {
+    parametersHandled: constraints.parametersHandled === true,
     hardConstraints: {
       conditionalCapacity: [],
       forbiddenPairs: [],
@@ -174,6 +175,7 @@ function deanonymizeConstraints(constraints, pseudoToReal) {
   if (!constraints) return constraints;
 
   const result = {
+    parametersHandled: constraints.parametersHandled === true,
     hardConstraints: {
       conditionalCapacity: [],
       forbiddenPairs: [],

@@ -426,6 +426,10 @@ body::before {
   color: var(--error-color);
 }
 
+.constraint-check--warn {
+  color: #d97706;
+}
+
 /* 4-sentence description */
 .output-card__description {
   line-height: 1.55;

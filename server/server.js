@@ -134,6 +134,18 @@ function applyCapacityOverrides(advisors, overrides) {
   });
 }
 
+/**
+ * Determine the three-state status for additional parameters enforcement.
+ * @param {Object} extractedConstraints - The deanonymized constraints from LLM
+ * @param {Object} summary - Algorithm option summary
+ * @returns {'satisfied'|'violated'|'not-enforceable'}
+ */
+function computeParametersStatus(extractedConstraints, summary) {
+  if (!extractedConstraints.parametersHandled) return 'not-enforceable';
+  if (summary.constraintsSatisfied === false) return 'violated';
+  return 'satisfied';
+}
+
 async function runJob(jobId, requestData, lotterySlug, mode) {
   jobs.set(jobId, { status: 'running' });
   try {
@@ -375,13 +387,21 @@ async function handleLottery(requestData, lotterySlug, mode) {
   // eslint-disable-next-line no-console
   console.log('  ✓ Complete!\n');
 
+  const hasParameters = Boolean(requestData.parameters?.trim());
+
   return {
     lotterySlug,
     mode,
+    hasParameters,
     xlsxPath: `/download/${lotterySlug}_output.xlsx`,
     options: finalOptions.map((option) => ({
       id: option.id,
-      summary: option.summary,
+      summary: {
+        ...option.summary,
+        parametersStatus: hasParameters
+          ? computeParametersStatus(extractedConstraints, option.summary)
+          : null
+      },
       csvPath: `/download/${lotterySlug}_output${option.id}.csv`,
       warning: null
     }))
