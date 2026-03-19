@@ -410,7 +410,7 @@ function App() {
           label="Additional parameters (optional)"
           value={parameters}
           onChange={setParameters}
-          placeholder="Additional constraints for the solver to incorporate. E.g. 'Studio x can have a minimum of 6 students.' Not all constraints will work, and in that case they will be noted in the output."
+          placeholder="Additional constraints for the solver to incorporate. E.g. 'Studio x can have a minimum of 6 students.' Not all constraints will work, use with caution."
           multiline
         />
       </div>
