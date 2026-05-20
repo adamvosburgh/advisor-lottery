@@ -1,4 +1,5 @@
 const path = require('path');
+const { randomBytes } = require('crypto');
 
 const { extractConstraints, validateAssignments } = require('./constraints');
 const { OUTPUT_DIR, writeJSON } = require('./fileio');
@@ -66,6 +67,15 @@ async function handleLottery(requestData, lotterySlug, mode) {
     requestData.students
   );
 
+  // Record input order, then shuffle so insertion order doesn't silently break ties
+  const originalOrder = new Map(requestData.students.map((s, i) => [s.name, i]));
+  for (let i = requestData.students.length - 1; i > 0; i -= 1) {
+    const j = randomBytes(4).readUInt32BE(0) % (i + 1);
+    [requestData.students[i], requestData.students[j]] = [requestData.students[j], requestData.students[i]];
+  }
+  // eslint-disable-next-line no-console
+  console.log(`  Shuffled ${requestData.students.length} students for randomized tiebreaking`);
+
   const algorithms = [
     { id: 1, runner: runWaterFillingAlgorithm },
     { id: 2, runner: runDeferredAcceptance },
@@ -73,15 +83,33 @@ async function handleLottery(requestData, lotterySlug, mode) {
   ];
 
   // STEP 0: Extract constraints using LLM (including per-entity capacity overrides)
-  // eslint-disable-next-line no-console
-  console.log('  [0/3] Extracting constraints from natural language...');
-  const extractionResult = await extractConstraints(
-    requestData.advisors,
-    requestData.parameters,
-    realToPseudo,
-    pseudoToReal,
-    mode
-  );
+  const hasParameters = requestData.parameters != null && requestData.parameters.trim().length > 0;
+  const hasNotes = requestData.advisors.some((a) => a.notes != null && a.notes.trim().length > 0);
+
+  let extractionResult;
+  if (!hasParameters && !hasNotes) {
+    // eslint-disable-next-line no-console
+    console.log('  [0/3] Skipping LLM — no natural language content to parse.');
+    extractionResult = {
+      constraints: {
+        hardConstraints: { conditionalCapacity: [], forbiddenPairs: [], requiredPairs: [] },
+        capacityOverrides: [],
+        softConstraints: [],
+        optimizationGoals: []
+      },
+      llmPayload: null
+    };
+  } else {
+    // eslint-disable-next-line no-console
+    console.log('  [0/3] Extracting constraints from natural language...');
+    extractionResult = await extractConstraints(
+      requestData.advisors,
+      requestData.parameters,
+      realToPseudo,
+      pseudoToReal,
+      mode
+    );
+  }
   const extractedConstraints = extractionResult.constraints;
   const extractionLLMPayload = extractionResult.llmPayload;
 
@@ -160,6 +188,16 @@ async function handleLottery(requestData, lotterySlug, mode) {
       // eslint-disable-next-line no-console
       console.log(`    Option ${option.id} has violations:`, validation.violations);
     }
+  }
+
+  // Restore input xlsx row order in students array and each option's assignments
+  // so output rows align with the original spreadsheet regardless of algorithm used
+  requestData.students.sort((a, b) => originalOrder.get(a.name) - originalOrder.get(b.name));
+  for (const option of finalOptions) {
+    option.assignments.sort(
+      (a, b) =>
+        (originalOrder.get(a.student) ?? Infinity) - (originalOrder.get(b.student) ?? Infinity)
+    );
   }
 
   const promptLog = {
