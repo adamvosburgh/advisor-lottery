@@ -260,6 +260,14 @@ function App() {
 
   const hasResults = useMemo(() => Boolean(results?.options?.length), [results]);
 
+  // Mirror the backend skip condition: LLM is not needed when there is nothing to parse.
+  // Studio mode always has backend-generated minimum-capacity notes, so toggle stays enabled.
+  const llmNotNeeded = useMemo(() => {
+    if (parameters.trim().length > 0) return false;
+    if (mode === 'studio') return false;
+    return advisors.every((a) => !a.notes || a.notes.trim() === '');
+  }, [parameters, advisors, mode]);
+
   // Fetch initial provider on mount
   useEffect(() => {
     fetchProvider();
@@ -432,7 +440,7 @@ function App() {
               type="button"
               className={`speed-button ${provider === 'ollama' ? 'speed-button--active' : ''}`}
               onClick={() => handleProviderToggle('ollama')}
-              disabled={loading || loadingProvider}
+              disabled={loading || loadingProvider || llmNotNeeded}
             >
               Slow
             </button>
@@ -440,12 +448,16 @@ function App() {
               type="button"
               className={`speed-button ${provider === 'huggingface' ? 'speed-button--active' : ''}`}
               onClick={() => handleProviderToggle('huggingface')}
-              disabled={loading || loadingProvider}
+              disabled={loading || loadingProvider || llmNotNeeded}
             >
               Fast
             </button>
           </div>
-          <span className="speed-description">{speedInfo.description}</span>
+          {llmNotNeeded ? (
+            <span className="speed-hint">LLM not necessary for this run</span>
+          ) : (
+            <span className="speed-description">{speedInfo.description}</span>
+          )}
         </div>
       </div>
 

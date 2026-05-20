@@ -220,6 +220,12 @@ body::before {
   line-height: 1.4;
 }
 
+.speed-hint {
+  font-size: 0.75rem;
+  color: var(--title-color);
+  opacity: 0.55;
+}
+
 .primary-button,
 .secondary-button {
   border: none;

@@ -17,6 +17,8 @@ const {
   adjustAdvisorsForRetry
 } = require('./algorithms');
 
+const N_RUNS = 10;
+
 /**
  * Apply per-entity capacity overrides extracted from additional parameters.
  * Override minCapacity and/or maxCapacity (capacity) for named advisors/studios.
@@ -39,6 +41,33 @@ function applyCapacityOverrides(advisors, overrides) {
       updated.capacity = override.maxCapacity;
     }
     return updated;
+  });
+}
+
+/**
+ * Fisher-Yates shuffle of an array in place using crypto.randomBytes.
+ */
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = randomBytes(4).readUInt32BE(0) % (i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+/**
+ * Select the run with the best primary metric, breaking ties with averagePlacement (lower = better).
+ * @param {Array<{result: object, run: number}>} candidates
+ * @param {string} primaryKey - summary field to optimize
+ * @param {boolean} primaryAsc - true = lower is better, false = higher is better
+ */
+function selectBestRun(candidates, primaryKey, primaryAsc) {
+  return candidates.reduce((best, curr) => {
+    const bv = best.result.summary[primaryKey];
+    const cv = curr.result.summary[primaryKey];
+    const better = primaryAsc ? cv < bv : cv > bv;
+    if (better) return curr;
+    if (cv === bv && curr.result.summary.averagePlacement < best.result.summary.averagePlacement) return curr;
+    return best;
   });
 }
 
@@ -67,14 +96,8 @@ async function handleLottery(requestData, lotterySlug, mode) {
     requestData.students
   );
 
-  // Record input order, then shuffle so insertion order doesn't silently break ties
+  // Capture original input order once — used for run 1 (deterministic baseline) and output re-sort
   const originalOrder = new Map(requestData.students.map((s, i) => [s.name, i]));
-  for (let i = requestData.students.length - 1; i > 0; i -= 1) {
-    const j = randomBytes(4).readUInt32BE(0) % (i + 1);
-    [requestData.students[i], requestData.students[j]] = [requestData.students[j], requestData.students[i]];
-  }
-  // eslint-disable-next-line no-console
-  console.log(`  Shuffled ${requestData.students.length} students for randomized tiebreaking`);
 
   const algorithms = [
     { id: 1, runner: runWaterFillingAlgorithm },
@@ -82,14 +105,14 @@ async function handleLottery(requestData, lotterySlug, mode) {
     { id: 3, runner: runMinimumRegretAlgorithm }
   ];
 
-  // STEP 0: Extract constraints using LLM (including per-entity capacity overrides)
+  // STEP 0: Extract constraints using LLM once, before the run loop
   const hasParameters = requestData.parameters != null && requestData.parameters.trim().length > 0;
   const hasNotes = requestData.advisors.some((a) => a.notes != null && a.notes.trim().length > 0);
 
   let extractionResult;
   if (!hasParameters && !hasNotes) {
     // eslint-disable-next-line no-console
-    console.log('  [0/3] Skipping LLM — no natural language content to parse.');
+    console.log('  [0] Skipping LLM — no natural language content to parse.');
     extractionResult = {
       constraints: {
         hardConstraints: { conditionalCapacity: [], forbiddenPairs: [], requiredPairs: [] },
@@ -101,7 +124,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
     };
   } else {
     // eslint-disable-next-line no-console
-    console.log('  [0/3] Extracting constraints from natural language...');
+    console.log('  [0] Extracting constraints from natural language...');
     extractionResult = await extractConstraints(
       requestData.advisors,
       requestData.parameters,
@@ -125,12 +148,12 @@ async function handleLottery(requestData, lotterySlug, mode) {
     console.log(`  Applied ${extractedConstraints.capacityOverrides.length} per-entity capacity override(s)`);
   }
 
-  const runAlgorithmWithRetry = (runner) => {
-    let option = runner(requestData.students, advisorsWithOverrides, requestData.parameters, mode);
+  const runAlgorithmWithRetry = (runner, studentsForRun) => {
+    let option = runner(studentsForRun, advisorsWithOverrides, requestData.parameters, mode);
     const constraints = validateAlgorithmConstraints(
       option.assignments,
       advisorsWithOverrides,
-      requestData.students,
+      studentsForRun,
       requestData.parameters,
       mode
     );
@@ -142,7 +165,7 @@ async function handleLottery(requestData, lotterySlug, mode) {
         advisorsWithOverrides,
         constraints.zeroOrMaxViolations
       );
-      option = runner(requestData.students, adjustedAdvisors, requestData.parameters, mode);
+      option = runner(studentsForRun, adjustedAdvisors, requestData.parameters, mode);
     }
 
     const minViolations = option.summary?.minimumCapacityViolations;
@@ -156,22 +179,47 @@ async function handleLottery(requestData, lotterySlug, mode) {
     return option;
   };
 
-  // STEP 1–3: Run algorithms
-  const finalOptions = [];
-  const labels = [
-    '[1/3] Running water-filling algorithm (minimax)...',
-    '[2/3] Running deferred acceptance algorithm (greedy)...',
-    '[3/3] Running minimum regret algorithm...'
-  ];
-  for (let i = 0; i < algorithms.length; i += 1) {
+  // STEPS 1–3: Run all three algorithms N_RUNS times, collecting candidates per algorithm
+  // eslint-disable-next-line no-console
+  console.log(`  Running ${N_RUNS} iterations (run 1 uses original order, runs 2–${N_RUNS} shuffled)...`);
+
+  const candidatesPerAlgo = [[], [], []];
+
+  for (let run = 1; run <= N_RUNS; run += 1) {
+    // Run 1: original input order (deterministic baseline). Subsequent runs: fresh shuffled copy.
+    const studentsForRun = [...requestData.students];
+    if (run > 1) {
+      shuffleInPlace(studentsForRun);
+    }
+
     // eslint-disable-next-line no-console
-    console.log(`  ${labels[i]}`);
-    finalOptions.push(runAlgorithmWithRetry(algorithms[i].runner));
+    console.log(`  [Run ${run}/${N_RUNS}]`);
+    for (let a = 0; a < algorithms.length; a += 1) {
+      const result = runAlgorithmWithRetry(algorithms[a].runner, studentsForRun);
+      candidatesPerAlgo[a].push({ result, run });
+    }
   }
 
-  // STEP 4: Deterministic validation of all three options
+  // Select best result per algorithm based on each algorithm's optimization target
+  // Option 1 (Water-Filling): lowest averagePlacement
+  // Option 2 (Deferred Acceptance): highest percentFirstChoice, tiebreak lowest averagePlacement
+  // Option 3 (Minimum Regret): lowest lowestPlacement (best worst-case), tiebreak lowest averagePlacement
+  const winners = [
+    selectBestRun(candidatesPerAlgo[0], 'averagePlacement', true),
+    selectBestRun(candidatesPerAlgo[1], 'percentFirstChoice', false),
+    selectBestRun(candidatesPerAlgo[2], 'lowestPlacement', true),
+  ];
+
   // eslint-disable-next-line no-console
-  console.log('  [4/4] Validating assignments...');
+  console.log(
+    `  Best runs selected: Option 1 → run ${winners[0].run}, Option 2 → run ${winners[1].run}, Option 3 → run ${winners[2].run}`
+  );
+
+  const finalOptions = winners.map(({ result, run }) => ({ ...result, runNumber: run }));
+
+  // STEP 4: Deterministic validation of all three winning options
+  // eslint-disable-next-line no-console
+  console.log('  Validating assignments...');
 
   for (let i = 0; i < finalOptions.length; i += 1) {
     const option = finalOptions[i];
@@ -203,6 +251,8 @@ async function handleLottery(requestData, lotterySlug, mode) {
   const promptLog = {
     timestamp: new Date().toISOString(),
     approach: 'Three Deterministic Algorithms with LLM Constraint Extraction & Deterministic Validation',
+    nRuns: N_RUNS,
+    winningRuns: { option1: winners[0].run, option2: winners[1].run, option3: winners[2].run },
     extractedConstraints,
     capacityOverridesApplied: extractedConstraints.capacityOverrides || [],
     option1_stats: finalOptions[0].summary,

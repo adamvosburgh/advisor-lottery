@@ -20,7 +20,8 @@ function saveSummaryTxt(lotterySlug, finalOptions, mode) {
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([n, c]) => `${n}: ${c}`)
       : ['—'];
-    lines.push(`OUTPUT ${option.id} — ${s.algorithm}`);
+    const runNote = option.runNumber != null ? ` (selected from run ${option.runNumber} of 10)` : '';
+    lines.push(`OUTPUT ${option.id} — ${s.algorithm}${runNote}`);
     lines.push(`Average Placement: ${avg}`);
     lines.push(`% First Choice: ${pct}`);
     lines.push(`Lowest Placement: ${lowest}`);
