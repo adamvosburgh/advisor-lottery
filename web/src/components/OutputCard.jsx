@@ -5,6 +5,12 @@ const ALGORITHM_DESCRIPTIONS = {
   3: 'This algorithm minimizes overall dissatisfaction across the whole group. The student with the fewest good options gets placed first into their best available studio, repeating until everyone is assigned, then pairs of students are swapped wherever a trade would reduce total dissatisfaction.'
 };
 
+const SELECTION_DESCRIPTIONS = {
+  1: 'The algorithm runs once with the uploaded student order, then re-runs nine times with the order shuffled; the run with the lowest average placement is kept.',
+  2: 'The algorithm runs once with the uploaded student order, then re-runs nine times with the order shuffled; the run with the highest first-choice rate is kept.',
+  3: 'The algorithm runs once with the uploaded student order, then re-runs nine times with the order shuffled; the run with the best (lowest) worst-case placement is kept.'
+};
+
 function generateComparisonText(option, allOptions) {
   if (!allOptions || allOptions.length < 3) return '';
 
@@ -17,14 +23,25 @@ function generateComparisonText(option, allOptions) {
 
   const me = metrics.find((m) => m.id === option.id);
   if (!me) return '';
-  const others = metrics.filter((m) => m.id !== option.id);
 
-  const bestAvg = me.avg <= Math.min(...others.map((o) => o.avg));
-  const worstAvg = me.avg >= Math.max(...others.map((o) => o.avg));
-  const bestFC = me.fc >= Math.max(...others.map((o) => o.fc));
-  const worstFC = me.fc <= Math.min(...others.map((o) => o.fc));
-  const bestLP = me.lp <= Math.min(...others.map((o) => o.lp));
-  const worstLP = me.lp >= Math.max(...others.map((o) => o.lp));
+  // Best/worst only count when there's actual variation across options.
+  // If all three tie on a metric, no one is "best" or "worst" on it.
+  const allAvg = metrics.map((m) => m.avg);
+  const allFC = metrics.map((m) => m.fc);
+  const allLP = metrics.map((m) => m.lp);
+  const minAvg = Math.min(...allAvg);
+  const maxAvg = Math.max(...allAvg);
+  const minFC = Math.min(...allFC);
+  const maxFC = Math.max(...allFC);
+  const minLP = Math.min(...allLP);
+  const maxLP = Math.max(...allLP);
+
+  const bestAvg = me.avg === minAvg && minAvg !== maxAvg;
+  const worstAvg = me.avg === maxAvg && minAvg !== maxAvg;
+  const bestFC = me.fc === maxFC && minFC !== maxFC;
+  const worstFC = me.fc === minFC && minFC !== maxFC;
+  const bestLP = me.lp === minLP && minLP !== maxLP;
+  const worstLP = me.lp === maxLP && minLP !== maxLP;
 
   const strengths = [];
   const weaknesses = [];
@@ -79,10 +96,10 @@ function OutputCard({ option, allOptions, mode = 'studio' }) {
   const capacitiesMet = summary.constraintsSatisfied !== false;
   const allAssignedOnce = summary.allStudentsAssigned !== false;
 
-  // 4-sentence description
   const staticDesc = ALGORITHM_DESCRIPTIONS[option.id] || summary.notes || '';
+  const selectionDesc = SELECTION_DESCRIPTIONS[option.id] || '';
   const comparisonDesc = generateComparisonText(option, allOptions);
-  const description = comparisonDesc ? `${staticDesc} ${comparisonDesc}` : staticDesc;
+  const description = [staticDesc, selectionDesc, comparisonDesc].filter(Boolean).join(' ');
 
   return (
     <div className="output-card">
