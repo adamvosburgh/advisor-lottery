@@ -10,6 +10,7 @@ const { createNameMapping } = require('./anonymize');
 const { saveSummaryTxt } = require('./summary');
 const {
   normalizeKey,
+  checkFeasibility,
   runWaterFillingAlgorithm,
   runDeferredAcceptance,
   runMinimumRegretAlgorithm,
@@ -146,6 +147,13 @@ async function handleLottery(requestData, lotterySlug, mode) {
   if (advisorsWithOverrides !== requestData.advisors && extractedConstraints.capacityOverrides?.length > 0) {
     // eslint-disable-next-line no-console
     console.log(`  Applied ${extractedConstraints.capacityOverrides.length} per-entity capacity override(s)`);
+  }
+
+  // Fail fast if min/max capacities can't accommodate the student count.
+  // Feasibility is purely arithmetic, so all three algorithms would fail identically.
+  const feasibility = checkFeasibility(requestData.students, advisorsWithOverrides, mode);
+  if (!feasibility.feasible) {
+    throw new Error(feasibility.reason);
   }
 
   const runAlgorithmWithRetry = (runner, studentsForRun) => {

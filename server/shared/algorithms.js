@@ -873,6 +873,7 @@ function runMinimumRegretAlgorithm(students, advisors, parameters = '', mode = '
 
 module.exports = {
   normalizeKey,
+  checkFeasibility,
   runWaterFillingAlgorithm,
   runDeferredAcceptance,
   runMinimumRegretAlgorithm,
