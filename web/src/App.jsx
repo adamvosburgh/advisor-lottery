@@ -198,7 +198,7 @@ function App() {
       const inferredAdvisors = Array.from(studioNames).map((name) => ({
         name,
         capacity: parseInt(maxStudentsPerStudio, 10) || 12,
-        notes: `minimum ${minStudentsPerStudio} students`
+        minCapacity: parseInt(minStudentsPerStudio, 10) || 0
       }));
 
       payload = {
@@ -261,12 +261,12 @@ function App() {
   const hasResults = useMemo(() => Boolean(results?.options?.length), [results]);
 
   // Mirror the backend skip condition: LLM is not needed when there is nothing to parse.
-  // Studio mode always has backend-generated minimum-capacity notes, so toggle stays enabled.
+  // Studio mode sends minCapacity numerically (not as a note), so the generic notes check
+  // works for both modes — vacuously true in studio mode since advisors state stays [].
   const llmNotNeeded = useMemo(() => {
     if (parameters.trim().length > 0) return false;
-    if (mode === 'studio') return false;
     return advisors.every((a) => !a.notes || a.notes.trim() === '');
-  }, [parameters, advisors, mode]);
+  }, [parameters, advisors]);
 
   // Fetch initial provider on mount
   useEffect(() => {

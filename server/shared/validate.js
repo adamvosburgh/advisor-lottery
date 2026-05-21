@@ -4,11 +4,13 @@ const AdvisorSchema = z
   .object({
     name: z.string().min(1, 'Advisor name is required'),
     capacity: z.coerce.number().int().min(0, 'Capacity must be zero or a positive integer'),
+    minCapacity: z.coerce.number().int().min(0).optional(),
     notes: z.string().optional().nullable()
   })
   .transform((advisor) => ({
     name: advisor.name.trim(),
     capacity: advisor.capacity,
+    ...(advisor.minCapacity !== undefined ? { minCapacity: advisor.minCapacity } : {}),
     notes: advisor.notes ? advisor.notes.trim() || undefined : undefined
   }));
 
